@@ -8,8 +8,10 @@ import { dirname, resolve } from 'node:path';
 import Fastify from 'fastify';
 import { loadConfig } from './core/config.js';
 import { Analytics, NdjsonAnalyticsSink } from './core/analytics.js';
+import { RoomManager } from './core/room-manager.js';
 import { healthRoute } from './routes/health.js';
 import { devRoute, type DebugState } from './routes/dev.js';
+import { roomsRoute } from './routes/rooms.js';
 
 export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
   const cfg = loadConfig(env);
@@ -37,7 +39,11 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
     await log.register(devRoute(debug));
   }
 
-  return { app: log, cfg, analytics };
+  // Phase-1 room state + REST contract (TDD §5).
+  const roomManager = new RoomManager();
+  await log.register(roomsRoute({ roomManager, analytics }), { prefix: '/api/v1' });
+
+  return { app: log, cfg, analytics, roomManager };
 }
 
 const isMain =
