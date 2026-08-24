@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   ClientFrameSchema,
+  CreateRoomResponseSchema,
+  JoinResponseSchema,
+  LobbyStateSchema,
   NicknameSchema,
   RoomCodeSchema,
   SearchRequestSchema,
@@ -78,5 +81,83 @@ describe('SearchRequestSchema', () => {
     expect(SearchRequestSchema.safeParse({ query: 'blur song 2' }).success).toBe(true);
     expect(SearchRequestSchema.safeParse({ query: '' }).success).toBe(false);
     expect(SearchRequestSchema.safeParse({ query: 'x'.repeat(121) }).success).toBe(false);
+  });
+});
+
+// ── Phase 1 responses / lobby (@aux/shared) ──────────────────────────────────
+
+describe('CreateRoomResponseSchema', () => {
+  const valid = { code: 'A7X2M', hostToken: 't'.repeat(20), playerId: 'p'.repeat(8) };
+
+  it('roundtrips a valid response', () => {
+    expect(CreateRoomResponseSchema.parse(valid)).toEqual(valid);
+  });
+
+  it('enforces token/playerId minimum lengths', () => {
+    expect(
+      CreateRoomResponseSchema.safeParse({ ...valid, hostToken: 't'.repeat(19) }).success,
+    ).toBe(false);
+    expect(CreateRoomResponseSchema.safeParse({ ...valid, playerId: 'p'.repeat(7) }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects an invalid room code', () => {
+    for (const bad of ['0OIL1', 'AAAA', 'aaaaa']) {
+      expect(CreateRoomResponseSchema.safeParse({ ...valid, code: bad }).success).toBe(false);
+    }
+  });
+});
+
+describe('JoinResponseSchema', () => {
+  const valid = { playerToken: 't'.repeat(20), playerId: 'p'.repeat(8), nickname: 'Ada' };
+
+  it('roundtrips a valid response', () => {
+    expect(JoinResponseSchema.parse(valid)).toEqual(valid);
+  });
+
+  it('enforces token/playerId minimum lengths', () => {
+    expect(JoinResponseSchema.safeParse({ ...valid, playerToken: 't'.repeat(19) }).success).toBe(
+      false,
+    );
+    expect(JoinResponseSchema.safeParse({ ...valid, playerId: 'p'.repeat(7) }).success).toBe(false);
+  });
+
+  it('enforces nickname bounds via NicknameSchema', () => {
+    expect(JoinResponseSchema.safeParse({ ...valid, nickname: '' }).success).toBe(false);
+    expect(JoinResponseSchema.safeParse({ ...valid, nickname: 'x'.repeat(21) }).success).toBe(
+      false,
+    );
+  });
+});
+
+describe('LobbyStateSchema', () => {
+  const valid = {
+    roomCode: 'A7X2M',
+    players: [
+      { nickname: 'Ada', connected: true },
+      { nickname: 'Bruno', connected: false },
+    ],
+    hostNickname: 'Ada',
+  };
+
+  it('roundtrips a valid lobby state', () => {
+    expect(LobbyStateSchema.parse(valid)).toEqual(valid);
+  });
+
+  it('rejects malformed players entries', () => {
+    expect(LobbyStateSchema.safeParse({ ...valid, players: [{ nickname: 'Ada' }] }).success).toBe(
+      false,
+    );
+    expect(
+      LobbyStateSchema.safeParse({ ...valid, players: [{ nickname: '', connected: true }] })
+        .success,
+    ).toBe(false);
+  });
+
+  it('rejects an invalid room code', () => {
+    for (const bad of ['0OIL1', 'AAA', 'AAAAAA']) {
+      expect(LobbyStateSchema.safeParse({ ...valid, roomCode: bad }).success).toBe(false);
+    }
   });
 });

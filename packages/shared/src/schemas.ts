@@ -41,6 +41,25 @@ export const SubmissionRequestSchema = z.object({
   track: TrackSchema,
 });
 
+// ── REST responses / lobby state ─────────────────────────────────────────────
+
+/** Opaque per-player auth token; min length guards against truncation accidents. */
+const TokenSchema = z.string().min(20);
+
+export const CreateRoomResponseSchema = z.object({
+  code: RoomCodeSchema,
+  hostToken: TokenSchema,
+  playerId: z.string().min(8),
+});
+export type CreateRoomResponse = z.infer<typeof CreateRoomResponseSchema>;
+
+export const JoinResponseSchema = z.object({
+  playerToken: TokenSchema,
+  playerId: z.string().min(8),
+  nickname: NicknameSchema,
+});
+export type JoinResponse = z.infer<typeof JoinResponseSchema>;
+
 // ── Snapshots (full-state replace-never-merge, TDD §9) ───────────────────────
 
 export const PublicPlayerSchema = z.object({
@@ -48,6 +67,13 @@ export const PublicPlayerSchema = z.object({
   connected: z.boolean(),
 });
 export type PublicPlayer = z.infer<typeof PublicPlayerSchema>;
+
+export const LobbyStateSchema = z.object({
+  roomCode: RoomCodeSchema,
+  players: z.array(PublicPlayerSchema),
+  hostNickname: NicknameSchema,
+});
+export type LobbyState = z.infer<typeof LobbyStateSchema>;
 
 export const SnapshotSchema = z.object({
   roomCode: RoomCodeSchema,
