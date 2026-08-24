@@ -112,3 +112,17 @@ These were adjudicated during design review (`docs/review-report.md`, rulings A�
 - **Reason:** No assumptions stacked on unverified Spotify behavior — the deep-dive doc is research, not proof.
 - **Alternatives:** Build optimistically, fix after (explicitly forbidden).
 - **Consequences:** Phase 3+ tasks touching playback stay blocked until spike report approved; probe script tracked as AUX-001.
+
+### D-015 ✅ Six-agent parallel workforce per phase
+- **Date:** 2026-08-24 (owner standing order)
+- **Decision:** Every phase is implemented by exactly 6 parallel agents with strictly separated file ownership (build · lint/format · tests · server/shared review · web review · independent reviewer gated on the other five). Controller owns integration, final quality-gate runs, commits, and governance-doc updates.
+- **Reason:** Owner mandate: parallel throughput without merge hazards; independent review catches cross-cutting drift single-threaded work misses.
+- **Alternatives:** Single-agent sequential implementation (rejected: slower, no adversarial check).
+- **Consequences:** Cross-boundary findings are reported to the controller for routing, never edited out of scope; reviewers must not run while siblings still edit.
+
+### D-016 ✅ Phase 0 correctness amendments (applied during six-agent review)
+- **Date:** 2026-08-24
+- **Decision:** Five corrections landed via specialist review: (1) room-code regex tightened from `[A-HJ-NP-Z2-9]` (32 symbols, admitted L) to exactly-31 `[A-HJKMNP-Z2-9]`, restoring D-A; (2) analytics NDJSON sink actually started at boot + async stream-error handler so analytics can never crash the process (D-010); (3) SIGTERM handled alongside SIGINT for container shutdowns; (4) rate-limiter `retryAfterSecs` prunes stale hits before reporting; (5) web entry resolution via `fileURLToPath` (Windows-safe) + CSS import paths fixed.
+- **Reason:** Review agents found real defects the initial skeleton shipped; each fix verified against its decision's intent.
+- **Alternatives:** Leave to later phases (rejected: security/correctness debt compounds).
+- **Consequences:** Alphabet property tests now pin the exact 31-symbol contract; shutdown path shared by both signals.

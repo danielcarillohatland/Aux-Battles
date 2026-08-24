@@ -3,18 +3,18 @@
 > Single source of progress truth. Updated as work completes — anyone should be able to stop development at any point and read exact status here.
 > Gate for every phase: `npm run typecheck && npm run lint && npm run format:check && npm run test` green, then phase report + owner approval.
 
-## Phase 0 — Foundation *(in progress)*
+## Phase 0 — Foundation *(complete pending W6 review)*
 - [x] Governance docs (DECISIONS / TASKS / TODO / PLAYTEST) + TDD amendments
-- [ ] Monorepo scaffold: root package.json, workspaces, tsconfigs, .gitignore
-- [ ] ESLint (flat) + Prettier wired to quality-gate script
-- [ ] GitHub Actions CI: install → typecheck → lint → test → build
-- [ ] `@aux/shared`: constants (alphabet, limits, timings), Zod schemas, WS frame types, error-code enum, analytics events
-- [ ] Server skeleton: Fastify bootstrap, `/healthz`, token minting/verify, in-memory rate limiter, config module
-- [ ] Server tests: token roundtrip, negative authZ cases, rate-limiter behavior
-- [ ] Web skeleton: Vite + SolidJS dual-entry (`host.html`, `player.html`), shared-ui shell
-- [ ] Analytics event bus (in-process, NDJSON sink) + dev-mode `/dev` dashboard shell
-- [ ] Vitest wiring both packages; FakeProvider/FakeLLM seams stubbed
-- [ ] Quality gate green end-to-end; conventional-commit history
+- [x] Monorepo scaffold: root package.json, workspaces, tsconfigs, .gitignore
+- [x] ESLint (flat) + Prettier wired to quality-gate script
+- [x] GitHub Actions CI: install → typecheck → lint → test → build
+- [x] `@aux/shared`: constants (alphabet, limits, timings), Zod schemas, WS frame types, error-code enum, analytics events
+- [x] Server skeleton: Fastify bootstrap, `/healthz`, token minting/verify, in-memory rate limiter, config module
+- [x] Server tests: token roundtrip, negative authZ cases, rate-limiter behavior
+- [x] Web skeleton: Vite + SolidJS dual-entry (`host.html`, `player.html`), shared-ui shell
+- [x] Analytics event bus (in-process, NDJSON sink) + dev-mode `/dev` dashboard shell
+- [x] Vitest wiring both packages; FakeProvider/FakeLLM seams stubbed
+- [x] Quality gate green end-to-end; conventional-commit history
 
 ## Phase 1 — Join flow (landing → lobby)
 - [ ] Landing page (create/join CTAs)
