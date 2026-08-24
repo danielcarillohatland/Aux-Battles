@@ -18,15 +18,15 @@
 
 **Carried into Phase 1 from review:** negative authZ route tests · `vi.useFakeTimers()` rate-limiter window-expiry case (findings #2/#3).
 
-## Phase 1 — Join flow (landing → lobby)
-- [ ] Landing page (create/join CTAs)
-- [ ] `POST /rooms` + 5×31 room-code generator w/ collision retry
-- [ ] QR code generation (join URL) on host lobby
-- [ ] `POST /rooms/:code/join` + nickname validation + NAME_TAKEN path
-- [ ] Lobby screens: host roster view, phone waiting view
+## Phase 1 — Join flow *(complete — reviewer PASS-WITH-NOTES; live smoke-tested)*
+- [x] Landing page (create/join CTAs)
+- [x] `POST /rooms` + 5×31 room-code generator w/ collision retry
+- [x] QR code generation (join URL) on host lobby
+- [x] `POST /rooms/:code/join` + nickname validation + NAME_TAKEN path
+- [x] Lobby screens: host roster view, phone waiting view
 - [ ] Join <15 s measured on real phones *(device measurement = owner playtest item)*
-- [ ] Negative authZ route tests (carried from Phase 0 review)
-- [ ] Fake-clock rate-limiter expiry test (carried from Phase 0 review)
+- [x] Negative authZ route tests — N/A this phase by contract: all Phase 1 endpoints are public; NOT_HOST/NOT_AUTHENTICATED surfaces arrive with the Phase 2 WS hub + host controls (reviewer-endorsed rationale)
+- [x] Fake-clock rate-limiter expiry test (carried from Phase 0 review)
 
 ## Phase 2 — Realtime core
 - [ ] Room FSM engine (table-driven, illegal transitions rejected, async mutex)

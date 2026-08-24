@@ -3,7 +3,7 @@
  * Every REST response is `{ ok: true, data }` or `{ ok: false, error: { code, message } }`
  * with codes from @aux/shared — part of the wire contract, matched precisely here.
  */
-import { SnapshotSchema } from '@aux/shared';
+import { LobbyStateSchema } from '@aux/shared';
 import type { PlayerSession } from './session.js';
 
 /** Personality-first, short — errors.ts copy lives client-side too (TDD §9). */
@@ -103,7 +103,7 @@ export async function fetchPlayerCount(code: string): Promise<number | null> {
   const env = await readEnvelope(res);
   const data = env?.ok === true ? env.data : null;
   if (!data) return null;
-  const parsed = SnapshotSchema.safeParse(data); // one protocol truth (@aux/shared)
+  const parsed = LobbyStateSchema.safeParse(data); // Phase 1 snapshot = lobby shape (A6 finding #1)
   if (parsed.success) return parsed.data.players.length;
   if (Array.isArray((data as { players?: unknown }).players)) {
     return (data as { players: unknown[] }).players.length; // tolerate older shape
