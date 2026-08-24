@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+package-lock.json
+*.log
+.env
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.DS_Store
+*.tsbuildinfo
