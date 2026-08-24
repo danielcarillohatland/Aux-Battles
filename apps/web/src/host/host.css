@@ -1,0 +1,178 @@
+/*
+ * AUX BATTLES — host screens (frontend-spec §2.1/§2.2, §6).
+ * Dark stage + one accent gradient (magenta→violet). Host = desktop/tablet:
+ * fluid type via clamp/vw so the code reads from across the room.
+ * Owner condition #10: zero animation delays, instant interactions —
+ * no entrance keyframes, no transition-delay anywhere in this file.
+ */
+
+.stage {
+  width: min(1100px, 92vw);
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: clamp(1rem, 4vh, 3rem) 0;
+}
+
+/* ── Landing ──────────────────────────────────────────────────────────── */
+
+.wordmark {
+  margin: 0;
+  font-size: clamp(2.5rem, 8vw, 6rem);
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  background: linear-gradient(100deg, #ff2fb4, #7c3aed);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.blades {
+  font-size: 0.7em;
+  vertical-align: middle;
+}
+.tagline {
+  margin: 0.5rem 0 clamp(1.5rem, 5vh, 3rem);
+  color: #9b9bb4;
+  font-size: clamp(1rem, 2vw, 1.35rem);
+}
+
+.btn-primary {
+  border: 0;
+  border-radius: 16px;
+  cursor: pointer;
+  color: #fff;
+  font-weight: 800;
+  background: linear-gradient(100deg, #ff2fb4, #7c3aed);
+  box-shadow: 0 8px 30px rgb(124 47 214 / 0.45);
+}
+.btn-primary:disabled {
+  opacity: 0.55;
+  cursor: wait;
+  box-shadow: none;
+}
+.btn-create {
+  font-size: clamp(1.4rem, 3vw, 2.2rem);
+  padding: clamp(1rem, 3vh, 1.75rem) clamp(3rem, 9vw, 6rem);
+  min-height: 48px;
+}
+
+.how-it-works {
+  margin-top: auto;
+  padding-top: clamp(2rem, 8vh, 4rem);
+  color: #9b9bb4;
+  font-size: clamp(0.85rem, 1.4vw, 1.05rem);
+}
+
+/* ── Banners (error / degraded) ───────────────────────────────────────── */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 1.25rem;
+  padding: 0.65rem 1.1rem;
+  border-radius: 12px;
+  font-size: 1rem;
+}
+.banner-error {
+  background: #3a1220;
+  border: 1px solid #ff2f6b;
+}
+.banner-warn {
+  background: #33270e;
+  border: 1px solid #d99a26;
+}
+.btn-retry {
+  border: 1px solid currentcolor;
+  background: transparent;
+  color: inherit;
+  border-radius: 8px;
+  padding: 0.3rem 0.85rem;
+  min-height: 48px;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+/* ── Lobby ────────────────────────────────────────────────────────────── */
+
+.lobby-label {
+  margin: 0;
+  color: #9b9bb4;
+  letter-spacing: 0.35em;
+  font-size: clamp(0.9rem, 1.8vw, 1.25rem);
+}
+.room-code {
+  /* ≥10vw per spec — readable from ~5 m on a TV (§6). */
+  font-size: max(10vw, 4.5rem);
+  line-height: 1.05;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  margin-right: -0.18em; /* re-center the trailing letterspace */
+  font-variant-numeric: tabular-nums;
+  cursor: copy;
+  user-select: all;
+}
+
+.qr-panel {
+  margin-top: clamp(0.75rem, 3vh, 1.5rem);
+  display: grid;
+  place-items: center;
+  gap: 0.5rem;
+  padding: clamp(1rem, 3vw, 1.75rem);
+  border-radius: 24px;
+  background: #14141f;
+  border: 1px solid #26263a;
+}
+.qr-panel canvas {
+  border-radius: 12px;
+}
+.join-url {
+  margin: 0;
+  color: #9b9bb4;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: clamp(0.8rem, 1.4vw, 1rem);
+  overflow-wrap: anywhere;
+}
+
+.roster {
+  margin-top: clamp(1.25rem, 4vh, 2.5rem);
+  width: min(560px, 90vw);
+}
+.roster h2 {
+  margin: 0 0 0.75rem;
+  font-size: clamp(1.1rem, 2.4vw, 1.6rem);
+  letter-spacing: 0.04em;
+}
+.roster ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: center;
+}
+.roster li {
+  padding: 0.45rem 1rem;
+  border-radius: 999px;
+  background: #14141f;
+  border: 1px solid #26263a;
+  min-height: 48px;
+  display: inline-flex;
+  align-items: center;
+}
+.empty-roster {
+  color: #9b9bb4;
+}
+
+.btn-start {
+  margin-top: clamp(1.5rem, 5vh, 3rem);
+  font-size: clamp(1.2rem, 2.6vw, 1.8rem);
+  padding: 1rem 3.5rem;
+  min-height: 48px;
+}

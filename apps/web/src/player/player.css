@@ -1,0 +1,150 @@
+/* Player-only styles (join + waiting). Shared theme lives in shared-ui/shell.css — untouched here. */
+
+.p-screen {
+  width: 100%;
+  max-width: 26rem;
+  margin: 0 auto;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1rem;
+  padding: 1.25rem;
+  padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+}
+
+.p-head h1 {
+  font-size: 1.4rem;
+}
+
+.p-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  text-align: left;
+}
+
+.p-label {
+  margin-top: 0.6rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #9b9bb4;
+}
+
+.p-input {
+  width: 100%;
+  padding: 0.8rem 1rem;
+  border: 1px solid #26263a;
+  border-radius: 12px;
+  background: #0e0e18;
+  color: #f2f2f7;
+  font-size: 1.15rem;
+  transition: border-color 180ms ease;
+}
+.p-input:focus {
+  outline: none;
+  border-color: #ff2fd6;
+}
+
+/* Gentle highlight on server-rejected fields — no shake, just a warm nudge. */
+.p-input.p-bad {
+  border-color: #ff5470;
+  box-shadow: 0 0 0 3px rgba(255, 84, 112, 0.18);
+}
+
+.p-code-input {
+  letter-spacing: 0.45em;
+  text-transform: uppercase;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 1.5rem;
+}
+
+.p-hint {
+  margin: 0.15rem 0 0;
+  font-size: 0.78rem;
+  color: #9b9bb4;
+}
+
+.p-error {
+  margin: 0.4rem 0 0;
+  font-size: 0.88rem;
+  color: #ff5470;
+}
+
+/* Sticky CTA above the keyboard (frontend-spec §2.3): stays visible while typing. */
+.p-cta-bar {
+  position: sticky;
+  bottom: calc(0.75rem + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.35rem;
+  padding-top: 0.5rem;
+}
+
+.p-cta {
+  padding: 0.9rem 1rem;
+  border: none;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #ff2fd6, #7b2ff7);
+  color: #fff;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+.p-cta:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.p-strip {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #9b9bb4;
+  text-align: center;
+}
+
+/* Waiting screen */
+.p-waiting {
+  align-items: center;
+  text-align: center;
+}
+
+.p-in {
+  margin: 0 0 0.75rem;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+/* CSS-only pulse dot; honors reduced-motion. */
+.p-dot {
+  width: 10px;
+  height: 10px;
+  margin-bottom: 0.9rem;
+  border-radius: 50%;
+  background: #ff2fd6;
+  animation: p-pulse 1.8s ease-out infinite;
+}
+
+@keyframes p-pulse {
+  from {
+    box-shadow: 0 0 0 0 rgba(255, 47, 214, 0.55);
+  }
+  to {
+    box-shadow: 0 0 0 14px rgba(255, 47, 214, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .p-dot {
+    animation: none;
+  }
+}
+
+.p-wait-copy {
+  margin: 0.5rem 0 0;
+  font-size: 1rem;
+  color: #c9c9de;
+}
