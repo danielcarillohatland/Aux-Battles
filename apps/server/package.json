@@ -1,0 +1,26 @@
+{
+  "name": "@aux/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aux/shared": "*",
+    "fastify": "^5.0.0",
+    "@fastify/websocket": "^11.0.0",
+    "fastify-plugin": "^5.0.1",
+    "better-sqlite3": "^12.2.0",
+    "pino-pretty": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.3"
+  }
+}
