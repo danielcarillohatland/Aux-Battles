@@ -3,18 +3,20 @@
 > Single source of progress truth. Updated as work completes — anyone should be able to stop development at any point and read exact status here.
 > Gate for every phase: `npm run typecheck && npm run lint && npm run format:check && npm run test` green, then phase report + owner approval.
 
-## Phase 0 — Foundation *(complete pending W6 review)*
+## Phase 0 — Foundation *(complete — reviewer verdict PASS-WITH-NOTES)*
 - [x] Governance docs (DECISIONS / TASKS / TODO / PLAYTEST) + TDD amendments
 - [x] Monorepo scaffold: root package.json, workspaces, tsconfigs, .gitignore
 - [x] ESLint (flat) + Prettier wired to quality-gate script
 - [x] GitHub Actions CI: install → typecheck → lint → test → build
 - [x] `@aux/shared`: constants (alphabet, limits, timings), Zod schemas, WS frame types, error-code enum, analytics events
 - [x] Server skeleton: Fastify bootstrap, `/healthz`, token minting/verify, in-memory rate limiter, config module
-- [x] Server tests: token roundtrip, negative authZ cases, rate-limiter behavior
+- [x] Server tests: token roundtrip, negative authZ cases, rate-limiter behavior *(authZ-negatives deferred to Phase 1 with routes — W6 finding #2)*
 - [x] Web skeleton: Vite + SolidJS dual-entry (`host.html`, `player.html`), shared-ui shell
 - [x] Analytics event bus (in-process, NDJSON sink) + dev-mode `/dev` dashboard shell
 - [x] Vitest wiring both packages; FakeProvider/FakeLLM seams stubbed
 - [x] Quality gate green end-to-end; conventional-commit history
+
+**Carried into Phase 1 from review:** negative authZ route tests · `vi.useFakeTimers()` rate-limiter window-expiry case (findings #2/#3).
 
 ## Phase 1 — Join flow (landing → lobby)
 - [ ] Landing page (create/join CTAs)
@@ -22,7 +24,9 @@
 - [ ] QR code generation (join URL) on host lobby
 - [ ] `POST /rooms/:code/join` + nickname validation + NAME_TAKEN path
 - [ ] Lobby screens: host roster view, phone waiting view
-- [ ] Join <15 s measured on real phones
+- [ ] Join <15 s measured on real phones *(device measurement = owner playtest item)*
+- [ ] Negative authZ route tests (carried from Phase 0 review)
+- [ ] Fake-clock rate-limiter expiry test (carried from Phase 0 review)
 
 ## Phase 2 — Realtime core
 - [ ] Room FSM engine (table-driven, illegal transitions rejected, async mutex)

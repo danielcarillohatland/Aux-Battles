@@ -12,6 +12,7 @@
 | AUX-002 | P2 | Choose production LLM vendor key (OpenRouter default) | Owner | Free-tier key sufficient for Phase 0–3 (FakeLLM used in CI) | S |
 | AUX-003 | P2 | Fly.io app creation + secrets wiring (deploy happens Phase 5) | Owner | Account exists; defer until Phase 5 unless earlier smoke wanted | S |
 | AUX-004 | P3 | Host-migration UX copy voice pass | Product owner | Copy drafted; needs owner tone approval | S |
+| AUX-005 | P3 | NdjsonAnalyticsSink.flush(): end-with-drain-callback so fast SIGTERM cannot drop buffered lines (W6 finding #4, non-blocking MVP) | Server agent | None | S |
 
 ## Resolved
 
