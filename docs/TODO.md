@@ -14,6 +14,8 @@
 | AUX-004 | P3 | Host-migration UX copy voice pass | Product owner | Copy drafted; needs owner tone approval | S |
 | AUX-005 | P3 | NdjsonAnalyticsSink.flush(): end-with-drain-callback so fast SIGTERM cannot drop buffered lines (W6 finding #4, non-blocking MVP) | Server agent | None | S |
 
+| AUX-006 | P1 | WS hub default snapshot hardcodes LOBBY/hasSubmitted:false — must be replaced by FSM-backed builder now that runtimes are wired | Server agent | None — seam exists (setSnapshotBuilder) | M |
+
 ## Resolved
 
 | ID | Resolution |

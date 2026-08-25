@@ -28,13 +28,13 @@
 - [x] Negative authZ route tests — N/A this phase by contract: all Phase 1 endpoints are public; NOT_HOST/NOT_AUTHENTICATED surfaces arrive with the Phase 2 WS hub + host controls (reviewer-endorsed rationale)
 - [x] Fake-clock rate-limiter expiry test (carried from Phase 0 review)
 
-## Phase 2 — Realtime core
-- [ ] Room FSM engine (table-driven, illegal transitions rejected, async mutex)
-- [ ] WS hub: connect-ticket handshake, snapshot push, `{t,ts,seq}`, heartbeat 15 s
-- [ ] TimerService: armed setTimeout + persisted deadline + boot sweep
-- [ ] Host controls: start, category pick, skip, kick
-- [ ] Reconnect/reclaim flow; duplicate-join supersede; late-join rules; host migration
-- [ ] Integration hard-case suite (simultaneous submits, refresh mid-round, expiry w/ live sockets…)
+## Phase 2 — Realtime core *(complete — reviewer PASS-WITH-NOTES resolved by controller integration; live wire-verified)*
+- [x] Room FSM engine (table-driven, illegal transitions rejected, async mutex)
+- [x] WS hub: connect-ticket handshake, snapshot push, `{t,ts,seq}`, heartbeat 15 s
+- [x] TimerService: armed setTimeout + persisted deadline + boot sweep
+- [x] Host controls: start, pick_category, skip_phase, begin_playback, advance_reveal, next_round, finish_game (kick lands with roster mgmt in Phase 3)
+- [x] Reconnect/reclaim flow (server + clients); duplicate-join supersede · late-join rules + host migration land in Phase 3 round flow
+- [x] Integration hard-case suite (simultaneous submits, refresh mid-round, expiry w/ live sockets…)
 - [ ] **PLAYTEST.md loop becomes active**
 
 ## Phase 2.5 — Spotify SPIKE ⚠️ *stop-and-report gate*

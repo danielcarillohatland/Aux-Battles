@@ -126,3 +126,10 @@ These were adjudicated during design review (`docs/review-report.md`, rulings A�
 - **Reason:** Review agents found real defects the initial skeleton shipped; each fix verified against its decision's intent.
 - **Alternatives:** Leave to later phases (rejected: security/correctness debt compounds).
 - **Consequences:** Alphabet property tests now pin the exact 31-symbol contract; shutdown path shared by both signals.
+
+### D-017 ✅ Phase 2 integration: runtime composition + host-control surface
+- **Date:** 2026-08-25 (reviewer findings 🔴#1/#2)
+- **Decision:** The committed FSM/TimerService/RoomStore parts are bound in the composition root: `gameRuntimesRoute` exposes host controls (`POST /rooms/:code/host/:action`) and `/reclaim`; every transition checkpoints via the FSM `onChange` hook; lazy rehydration seeds fresh rooms and rebuilds persisted ones with boot-sweep timer re-arm; TTL sweeper wired cleanup-only. `INVALID_ACTION` added to the error enum (additive, contract-safe). WS hub gains a `setSnapshotBuilder` seam for tests/controller wiring.
+- **Reason:** Independent review correctly ruled the Phase 2 deliverable "a parts kit, not a running machine" — TDD §13 Phase 2 scope requires full FSM + timers + host controls + reconnect/reclaim as a live system.
+- **Alternatives:** Defer wiring to Phase 3 round flow (rejected: reviewer hold on COMPLETE designation is correct — unwired state cannot satisfy the phase gate).
+- **Consequences:** Live wire-verified: create → start_game → pick_category → SCENARIO with armed 8s deadline → autonomous TIMER_EXPIRED advance to SONG_SELECTION. Known follow-up AUX-006: WS default snapshot still hardcodes LOBBY until the FSM-backed builder replaces it. Kick command deferred to Phase 3 roster work.
