@@ -60,7 +60,8 @@
 - [x] Winner screen + next-round loop
 
 ## Phase 5 — Polish & deploy
-- [ ] k6 load gate: 50 rooms × 8 players thresholds green (script ready; requires k6 runtime)
+- [x] Local capacity gate: 50 rooms × 8 players, 450 requests, 0 failures, p95 49 ms
+- [ ] k6 soak gate + 500×8 headroom variant (script ready; requires k6 runtime)
 - [ ] Fly.io deploy (image/config/volume wiring ready; requires owner Fly app + secrets)
 - [ ] Structured playtest #1 executed, findings logged in PLAYTEST.md
 - [ ] Reveal timing polish from playtest data
