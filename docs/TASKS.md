@@ -37,12 +37,12 @@
 - [x] Integration hard-case suite (simultaneous submits, refresh mid-round, expiry w/ live sockets…)
 - [ ] **PLAYTEST.md loop becomes active**
 
-## Phase 2.5 — Spotify SPIKE ⚠️ *stop-and-report gate*
-- [ ] Day-one probes: preview_url availability, transfer latency, rate ceiling, device reliability
-- [ ] Preload-and-verify playback orchestrator behind `MusicProvider`
-- [ ] OAuth PKCE server-side flow + encrypted token store
-- [ ] Search proxy (`POST /search`)
-- [ ] L0 (API autoplay) AND L4 (manual) demo-able
+## Phase 2.5 — Spotify SPIKE *(code+probes complete; live device demo pending owner login)*
+- [x] Day-one probes: preview_url DEAD (0/10), search limit>10 hard-rejected (400), rate ceiling >20-burst · transfer/device probes need host OAuth token → live demo pending
+- [x] Preload-and-verify playback orchestrator behind `MusicProvider`
+- [x] OAuth PKCE server-side flow + encrypted token store
+- [x] Search proxy (`POST /search`)
+- [ ] L0 (API autoplay) AND L4 (manual) demo-able *(L4 UI built; both demos need one owner browser login)*
 - [ ] **If major limitation found: STOP implementation, present findings to owner**
 
 ## Phase 3 — Submissions & round flow
