@@ -6,6 +6,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import { loadConfig } from './core/config.js';
 import { Analytics, NdjsonAnalyticsSink } from './core/analytics.js';
@@ -29,8 +30,12 @@ import { spotifyRoute } from './routes/spotify.js';
 
 export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
   // Load .env (gitignored) for local dev — real env vars always win.
-  const envFile = resolve(process.cwd(), '.env');
-  if (existsSync(envFile)) {
+  // Anchored to the repo root (src/ → apps/server/src → apps/server → root)
+  // because npm workspaces run this file with cwd=apps/server.
+  const repoRoot = resolve(fileURLToPath(import.meta.url), '../../../..');
+  for (const candidate of [process.cwd(), repoRoot]) {
+    const envFile = resolve(candidate, '.env');
+    if (!existsSync(envFile)) continue;
     for (const line of readFileSync(envFile, 'utf8').split('\n')) {
       const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
       if (m?.[1] !== undefined && m[2] !== undefined && env[m[1]] === undefined) env[m[1]] = m[2];
