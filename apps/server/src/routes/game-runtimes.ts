@@ -17,8 +17,12 @@ import { RoomFsm } from '../fsm/engine.js';
 import { IllegalTransitionError } from '../fsm/types.js';
 import type { FsmEvent, TransitionPayload } from '../fsm/types.js';
 import type { FsmState } from '@aux/shared';
+import { submitRandomForMissing } from './rounds.js';
+import type { SubmissionStore } from '../core/submissions.js';
 import { createRateLimiter, type RateLimiter } from '../core/rate-limit.js';
 import { verifyToken } from '../core/tokens.js';
+import type { WsHub } from '../ws/types.js';
+import type { RoundOrchestrator } from '../core/round-orchestrator.js';
 
 /** Durable checkpoint shape: FSM state + roster linkage. Opaque to RoomStore. */
 interface Checkpoint {
@@ -32,6 +36,19 @@ export interface GameRuntimesOptions {
   roomManager: RoomManager;
   store: RoomStore;
   analytics: Analytics;
+  orchestrator?: RoundOrchestrator | undefined;
+  /**
+   * Controller seam: receives live-phase accessors once the route plugin is
+   * registered (used by the submissions route for gating + quorum dispatch).
+   */
+  exposeRuntime?(runtime: {
+    getRoomPhase(code: string): { state: import('@aux/shared').FsmState; roundIdx: number } | null;
+    dispatchAllSubmitted(code: string): Promise<boolean>;
+  }): void;
+  /** Push surface for kick (Phase 3 roster mgmt); attached when WS hub exists. */
+  wsHub?: WsHub | undefined;
+  /** Submission engine (Phase 3): chicken-fill on SONG_SELECTION timer expiry. */
+  submissions: SubmissionStore;
 }
 
 const hostActionLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
@@ -105,10 +122,12 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
         onChange: (change) => {
           armForPhase(code, change.phaseEndsAt);
           persist(code, fsm);
+          opts.orchestrator?.onTransition(change);
         },
       });
       const timers = new TimerService();
       runtimes.set(code, { fsm, timers });
+      opts.orchestrator?.register(code, fsm);
       persist(code, fsm);
       return { fsm, timers };
     }
@@ -122,10 +141,12 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
       onChange: (change) => {
         armForPhase(code, change.phaseEndsAt);
         persist(code, fsm);
+        opts.orchestrator?.onTransition(change);
       },
     });
     const timers = new TimerService();
     runtimes.set(code, { fsm, timers });
+    opts.orchestrator?.register(code, fsm);
 
     // Boot-sweep semantics (D-C): a persisted non-null deadline that is still
     // in the future gets re-armed; one in the past fires immediately through
@@ -166,6 +187,24 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
     const key = `phase:${code}`;
     if (phaseEndsAt !== null && isTimedState(rt.fsm.state)) {
       rt.timers.arm(key, phaseEndsAt, () => {
+        // Chicken 🐔 fill BEFORE the transition when selection time expires
+        // (TDD §4): connected non-submitters get a random track + the brand.
+        if (rt.fsm.state === 'SONG_SELECTION') {
+          try {
+            const summary = submitRandomForMissing(code, `${code}:${rt.fsm.roundIdx}`, {
+              roomManager,
+              submissions: opts.submissions,
+            });
+            if (summary.filledCount > 0) {
+              opts.wsHub?.publish(code, {
+                t: 'submission_received',
+                count: summary.totalSubmissions,
+              });
+            }
+          } catch {
+            // Chicken-fill is best-effort; the FSM advance must not be blocked.
+          }
+        }
         void rt.fsm.dispatch('TIMER_EXPIRED').catch(() => {});
       });
     } else {
@@ -230,6 +269,10 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
           case 'begin_playback':
             result = await dispatchAsHost(req.params.code, 'BEGIN_PLAYBACK');
             break;
+          case 'queue_done':
+            // Manual-mode round end (D-E): the host taps Done after the last card.
+            result = await dispatchAsHost(req.params.code, 'QUEUE_DONE');
+            break;
           case 'advance_reveal':
             result = await dispatchAsHost(req.params.code, 'ADVANCE_REVEAL', {
               final: req.body?.final === true,
@@ -258,6 +301,45 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
         }
         analytics.emit({ type: 'round_completed', roomId: req.params.code, durationMs: 0 });
         return reply.send({ ok: true as const, data: { done: true } });
+      },
+    );
+
+    /**
+     * Kick (Phase 3 roster mgmt, backend-spec §5): host-only, DELETE-style POST.
+     * Pushes `kicked` + closes the socket (wsHub.kick), then removes the player
+     * from the roster and rebroadcasts so every client's snapshot is current.
+     */
+    app.post<{ Params: { code: string }; Body: { playerId?: unknown } }>(
+      '/rooms/:code/kick',
+      { preHandler: rateLimit(hostActionLimiter, 'host') },
+      async (req, reply) => {
+        const auth = authenticate(roomManager, req.params.code, req);
+        if (auth === null) {
+          return reply
+            .code(401)
+            .send(apiError('NOT_AUTHENTICATED', 'valid session token required'));
+        }
+        if (!auth.isHost) {
+          return reply.code(403).send(apiError('NOT_HOST', 'only the host can do that'));
+        }
+        const playerId = typeof req.body?.playerId === 'string' ? req.body.playerId : '';
+        const room = roomManager.get(req.params.code);
+        if (room === undefined) {
+          return reply.code(404).send(apiError('ROOM_NOT_FOUND', 'no such room'));
+        }
+        if (playerId === '' || !room.players.has(playerId)) {
+          return reply.code(404).send(apiError('INVALID_ACTION', 'no such player in this room'));
+        }
+        if (playerId === room.hostPlayerId) {
+          return reply.code(409).send(apiError('INVALID_ACTION', 'the host cannot be kicked'));
+        }
+
+        // Close the socket FIRST so the client sees `kicked`, not a plain drop;
+        // then remove roster entry (kicked players may NOT reclaim — fresh join only).
+        opts.wsHub?.kick(req.params.code, playerId, 'kicked by host');
+        room.players.delete(playerId);
+        opts.wsHub?.broadcastStateChange(req.params.code);
+        return reply.send({ ok: true as const, data: { kicked: true, playerId } });
       },
     );
 
@@ -308,6 +390,25 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
           phaseEndsAt: rt.fsm.phaseEndsAt,
         },
       });
+    });
+
+    // Controller seam (R1 integration): lets the submissions route read the
+    // live phase + dispatch quorum early-fire through the room FSM mutex.
+    opts.exposeRuntime?.({
+      getRoomPhase: (code) => {
+        const rt = getRuntime(code);
+        return rt === null ? null : { state: rt.fsm.state, roundIdx: rt.fsm.roundIdx };
+      },
+      dispatchAllSubmitted: async (code) => {
+        const rt = getRuntime(code);
+        if (rt === null) return false;
+        try {
+          await rt.fsm.dispatch('ALL_SUBMITTED');
+          return true;
+        } catch {
+          return false;
+        }
+      },
     });
   };
 }

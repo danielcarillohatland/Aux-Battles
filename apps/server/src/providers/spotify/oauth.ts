@@ -315,6 +315,17 @@ export class EncryptedSpotifyTokenStore implements SpotifyTokenStore {
     return this.sealed.size;
   }
 
+  /**
+   * Most recently saved session token (Map insertion order), or null when no
+   * host has OAuthed yet. Bridge for the playback/search seam (single-host
+   * MVP): the newest session IS the host's.
+   */
+  latestSession(): string | null {
+    let last: string | null = null;
+    for (const key of this.sealed.keys()) last = key;
+    return last;
+  }
+
   async save(sessionToken: string, tokens: StoredTokens): Promise<void> {
     this.sealed.set(sessionToken, seal(this.opts.key, JSON.stringify(tokens)));
   }

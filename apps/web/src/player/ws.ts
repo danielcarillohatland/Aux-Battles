@@ -33,6 +33,12 @@ export interface RealtimeHandle {
   readonly connState: () => ConnState;
   /** Seconds left in the phase, computed locally from `phaseEndsAt` (D-C). */
   readonly countdownSeconds: () => number | null;
+  /**
+   * Live submissions count. Seeded from each snapshot's authoritative
+   * `submissionsCount`, nudged immediately by `submission_received` count-only
+   * frames so the sealed screen ticks without waiting for the next snapshot.
+   */
+  readonly submissionCount: () => number | null;
   stop: () => void;
 }
 
@@ -48,6 +54,7 @@ export function createPlayerRealtime(opts: RealtimeOptions): RealtimeHandle {
   const [snapshot, setSnapshot] = createSignal<Snapshot | null>(null);
   const [connState, setConnState] = createSignal<ConnState>('connecting');
   const [countdownSeconds, setCountdownSeconds] = createSignal<number | null>(null);
+  const [submissionCount, setSubmissionCount] = createSignal<number | null>(null);
 
   let ws: WebSocket | null = null;
   let stopped = false;
@@ -129,6 +136,7 @@ export function createPlayerRealtime(opts: RealtimeOptions): RealtimeHandle {
 
   const applySnapshot = (snap: Snapshot) => {
     setSnapshot(snap);
+    setSubmissionCount(snap.submissionsCount); // authoritative; frames only nudge between snapshots
     startCountdown();
   };
 
@@ -151,7 +159,9 @@ export function createPlayerRealtime(opts: RealtimeOptions): RealtimeHandle {
       case 'timer_tick':
         return; // ignored — countdown derives from phaseEndsAt (D-C)
       case 'submission_received':
-        return; // count arrives authoritatively via state_change
+        // Count-only frame (anonymity): nudge the live counter between snapshots.
+        setSubmissionCount(frame.count);
+        return;
       case 'judgement':
       case 'reveal_owner':
         return; // Phase 4 payloads land later
@@ -307,6 +317,7 @@ export function createPlayerRealtime(opts: RealtimeOptions): RealtimeHandle {
     snapshot,
     connState,
     countdownSeconds,
+    submissionCount,
     stop: () => terminate(null, 'client stopped'),
   };
 }

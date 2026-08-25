@@ -155,3 +155,297 @@
   font-variant-numeric: tabular-nums;
   color: #ff2fd6;
 }
+
+/* ── Song selection (frontend-spec §2.6) ───────────────────────────────────── */
+
+.p-select-screen {
+  justify-content: flex-start;
+  padding-top: max(1rem, env(safe-area-inset-top));
+  gap: 0.7rem;
+}
+
+.p-select-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.p-round-tag {
+  margin: 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #9b9bb4;
+}
+.p-select-timer {
+  color: #ff2fd6;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Search pinned top — never fights the keyboard. */
+.p-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.p-search-icon {
+  position: absolute;
+  left: 0.8rem;
+  font-size: 0.95rem;
+  pointer-events: none;
+}
+.p-search-input {
+  width: 100%;
+  padding-left: 2.5rem;
+  padding-right: 2.5rem;
+  border-radius: 999px;
+}
+.p-search-clear {
+  position: absolute;
+  right: 0.55rem;
+  width: 1.8rem;
+  height: 1.8rem;
+  border: none;
+  border-radius: 50%;
+  background: #26263a;
+  color: #c9c9de;
+  font-size: 0.8rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* Results fill the remaining viewport; the sticky pick bar floats over it. */
+.p-results {
+  flex: 1 1 auto;
+  min-height: 40dvh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding-bottom: 8rem; /* room for the pick bar above the keyboard */
+  overscroll-behavior: contain;
+}
+
+.p-results-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 2.2rem 1rem;
+  text-align: center;
+}
+
+.p-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.4rem;
+  margin-top: 0.3rem;
+}
+.p-chip {
+  padding: 0.4rem 0.8rem;
+  border: 1px solid #26263a;
+  border-radius: 999px;
+  background: #14141f;
+  color: #c9c9de;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+/* Skeleton shimmer rows while search is in flight. */
+.p-skel {
+  pointer-events: none;
+}
+.p-skel-art {
+  width: 44px;
+  height: 44px;
+}
+.p-skel-line {
+  display: block;
+  width: 70%;
+  height: 0.7rem;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #20203a, #33335a, #20203a);
+  background-size: 200% 100%;
+  animation: p-shimmer 900ms linear infinite;
+}
+.p-skel-line-short {
+  width: 45%;
+  height: 0.55rem;
+}
+@keyframes p-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Sticky pick bar ABOVE the keyboard / safe-area inset. */
+.p-pick-bar {
+  position: fixed;
+  left: 50%;
+  bottom: calc(0.75rem + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 10;
+  width: min(24rem, calc(100vw - 1.5rem));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid #2c2c44;
+  border-radius: 16px;
+  background: rgba(20, 20, 31, 0.97);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.55);
+}
+.p-pick-info {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+.p-pick-label {
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #9b9bb4;
+}
+.p-pick-title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 700;
+}
+.p-pick-artist {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.78rem;
+  color: #9b9bb4;
+}
+.p-pick-bar .p-error {
+  flex-basis: 100%;
+}
+
+/* Two-step confirm: LOCK IT IN → SURE? 🔒 → locked. No transition delays. */
+.p-sure-btn {
+  flex: none;
+  min-width: 9.5rem;
+  padding: 0.85rem 1rem;
+}
+.p-sure-armed {
+  background: linear-gradient(135deg, #ff5470, #ff2fd6);
+  box-shadow: 0 0 18px rgba(255, 47, 214, 0.55);
+}
+.p-sure-busy {
+  opacity: 0.7;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .p-skel-line {
+    animation: none;
+  }
+}
+
+/* ── Sealed / CHICKEN (frontend-spec §2.7) ─────────────────────────────────── */
+
+.p-sealed-screen {
+  justify-content: center;
+}
+
+.p-seal-card {
+  align-items: center;
+  gap: 0.6rem;
+  padding: 2rem 1.4rem;
+}
+
+.p-seal-lock {
+  font-size: 3.2rem;
+  animation: p-float 3.2s ease-in-out infinite;
+}
+@keyframes p-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.p-seal-stamp {
+  margin: 0.2rem 0 0;
+  font-size: 1.7rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.p-seal-pick {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.7rem 1.2rem;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04); /* frosted glass over your pick */
+  backdrop-filter: blur(6px);
+}
+.p-seal-art {
+  margin-bottom: 0.3rem;
+  filter: blur(2px) saturate(0.8); /* title hidden-ish behind frost, spec §2.7 */
+}
+.p-seal-track {
+  font-weight: 700;
+  filter: blur(3px); /* frosted: visible shape, unreadable text */
+  user-select: none;
+}
+.p-seal-artist {
+  font-size: 0.82rem;
+  color: #9b9bb4;
+  filter: blur(2px);
+  user-select: none;
+}
+
+.p-progress {
+  margin: 0.6rem 0 0;
+  font-size: 0.95rem;
+  color: #c9c9de;
+}
+
+.p-chicken-stamp {
+  margin: 0.2rem 0 0;
+  font-size: 1.9rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: #ffb02f;
+}
+
+.p-peer-dots {
+  display: flex;
+  gap: 0.45rem;
+  margin-top: 0.4rem;
+}
+.p-peer-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff2fd6;
+  opacity: 0.85;
+}
+.p-peer-dot[data-n='1'] {
+  opacity: 0.6;
+}
+.p-peer-dot[data-n='2'] {
+  opacity: 0.4;
+}
+.p-peer-dots .p-peer-dot {
+  animation: p-pulse 1.8s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .p-seal-lock,
+  .p-peer-dots .p-peer-dot {
+    animation: none;
+  }
+}

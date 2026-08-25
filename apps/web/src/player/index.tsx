@@ -13,6 +13,10 @@ import type { JoinFailure } from './api.js';
 import { clearSession, loadSession, readUrlCode, saveSession } from './session.js';
 import type { PlayerSession } from './session.js';
 import { createPlayerRealtime } from './ws.js';
+import { clearSubmissionIfStale, loadSubmission } from './submission-store.js';
+import type { SubmissionRecord } from './submission-store.js';
+import { SongSelection } from './SongSelection.js';
+import { SealedScreen } from './SealedScreen.js';
 
 // ── Join screen ───────────────────────────────────────────────────────────────
 
@@ -211,39 +215,97 @@ const WaitingScreen = (props: { session: PlayerSession; onLost: () => void }) =>
   const count = () => rt?.snapshot()?.players.length ?? null;
   const countdown = () => rt?.countdownSeconds() ?? null;
   const connState = () => rt?.connState() ?? 'connecting';
+  const submitted = () => rt?.submissionCount() ?? null;
+  const roundIdx = () => rt?.snapshot()?.roundIdx ?? 0;
+
+  // ── Phase-3 routing: song selection → sealed → chicken ─────────────────────
+  // Local record of MY pick is the truth-source the snapshot lacks: it can't
+  // tell `you.hasSubmitted` (mine) from a server-side CHICKEN assignment.
+  const [record, setRecord] = createSignal<SubmissionRecord | null>(
+    loadSubmission(props.session.code),
+  );
+
+  // Round rolled over → drop last round's record so it can't seal the new round.
+  createEffect(() => {
+    const r = roundIdx();
+    const rec = record();
+    if (rec && rec.roundIdx !== r) {
+      clearSubmissionIfStale(props.session.code, r);
+      setRecord(null);
+    }
+  });
+
+  const hasSubmitted = () => rt?.snapshot()?.you.hasSubmitted === true || record() !== null;
+  /** Server says submitted + we have no pick on file ⇒ judge assigned us one. */
+  const chicken = () => rt?.snapshot()?.you.hasSubmitted === true && record() === null;
+
+  const inSelectionPhase = () => state() === 'SONG_SELECTION';
+  const showSealed = () => hasSubmitted() && (inSelectionPhase() || state() === 'LOCKED');
+  const showPickUi = () => inSelectionPhase() && !hasSubmitted();
+
+  const onSealed = () => setRecord(loadSubmission(props.session.code));
 
   return (
-    <div class="p-screen">
-      <header class="p-head">
-        <h1>AUX ⚔ BATTLES</h1>
-      </header>
-      <div class="p-card p-waiting">
-        <p class="p-in">you're in, {props.session.nickname} 🎧</p>
-        <span class="p-dot" aria-hidden="true" />
-        <p class="p-sub">
-          {count() === null ? 'counting heads…' : `${count()} player${count() === 1 ? '' : 's'} in`}
-        </p>
-        <Show when={countdown() !== null}>
-          <p class="p-countdown" role="timer">
-            {countdown()}s left
-          </p>
+    <Show
+      when={showPickUi()}
+      fallback={
+        <Show
+          when={showSealed()}
+          fallback={
+            <div class="p-screen">
+              <header class="p-head">
+                <h1>AUX ⚔ BATTLES</h1>
+              </header>
+              <div class="p-card p-waiting">
+                <p class="p-in">you're in, {props.session.nickname} 🎧</p>
+                <span class="p-dot" aria-hidden="true" />
+                <p class="p-sub">
+                  {count() === null
+                    ? 'counting heads…'
+                    : `${count()} player${count() === 1 ? '' : 's'} in`}
+                </p>
+                <Show when={countdown() !== null}>
+                  <p class="p-countdown" role="timer">
+                    {countdown()}s left
+                  </p>
+                </Show>
+                {/* Live FSM state label straight off the realtime snapshot. */}
+                <p class="p-wait-copy" data-state={state()}>
+                  {STATE_LABEL[state()]}
+                  <Show when={connState() !== 'live'}>
+                    {' '}
+                    · {connState() === 'polling' ? '(polling)' : '(reconnecting…)'}
+                  </Show>
+                </p>
+                <Show when={kickCopy()}>
+                  <p class="p-error" role="alert">
+                    {kickCopy()}
+                  </p>
+                </Show>
+                <p class="p-hint">keep this tab open — you're {props.session.code}</p>
+              </div>
+            </div>
+          }
+        >
+          <SealedScreen
+            nickname={props.session.nickname}
+            track={record()?.track ?? null}
+            chicken={chicken()}
+            roundIdx={roundIdx()}
+            submitted={submitted}
+            totalPlayers={count}
+            countdownSeconds={countdown}
+          />
         </Show>
-        {/* Live FSM state label straight off the realtime snapshot. */}
-        <p class="p-wait-copy" data-state={state()}>
-          {STATE_LABEL[state()]}
-          <Show when={connState() !== 'live'}>
-            {' '}
-            · {connState() === 'polling' ? '(polling)' : '(reconnecting…)'}
-          </Show>
-        </p>
-        <Show when={kickCopy()}>
-          <p class="p-error" role="alert">
-            {kickCopy()}
-          </p>
-        </Show>
-        <p class="p-hint">keep this tab open — you're {props.session.code}</p>
-      </div>
-    </div>
+      }
+    >
+      <SongSelection
+        session={props.session}
+        roundIdx={roundIdx()}
+        countdownSeconds={countdown}
+        onSealed={onSealed}
+      />
+    </Show>
   );
 };
 

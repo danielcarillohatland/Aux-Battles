@@ -15,11 +15,15 @@ import { apiRequest, HostApiError } from './api.js';
 import { errorText } from './errors.js';
 import { createHostRealtime } from './ws.js';
 import type { Track } from '@aux/shared';
-import { ManualPlayback } from './manual-playback.js';
+import { RoundFlow } from './round/RoundFlow.js';
 
 interface HostLobbyProps {
   room: { code: string; hostToken: string; playerId: string };
 }
+
+/** Server-side host-control endpoint for this room (game-runtimes route). */
+const hostActionUrl = (code: string, action: string) =>
+  `/api/v1/rooms/${encodeURIComponent(code)}/host/${action}`;
 
 /** Friendly label per FSM state — shown next to the connection dot. */
 const STATE_LABEL: Record<Snapshot['state'], string> = {
@@ -39,7 +43,6 @@ export const HostLobby = (props: HostLobbyProps) => {
   const [fatal, setFatal] = createSignal<string | null>(null);
   const [actionBusy, setActionBusy] = createSignal(false);
   const [actionError, setActionError] = createSignal<string | null>(null);
-  const [category, setCategory] = createSignal('');
   let canvasRef: HTMLCanvasElement | undefined;
 
   // Realtime engine: WS-first with built-in polling fallback + reconnect.
@@ -66,12 +69,22 @@ export const HostLobby = (props: HostLobbyProps) => {
   const degraded = () => connState() === 'reconnecting' || connState() === 'polling';
 
   // D-E manual mode: the round queue mirror + host-driven index. The card is
-  // presentational; advancing flows back up through `advanceManual` (REST per
-  // D-D once the Phase 2.5 playback endpoints land — playback_cue payload).
+  // presentational; advancing flows back up through `advanceManual` until the
+  // Phase-2.5/3 playback state endpoints give us the authoritative wire copy.
   const [manualQueue] = createSignal<Track[]>([]);
   const [manualIndex, setManualIndex] = createSignal(0);
   const advanceManual = () =>
     setManualIndex((i) => Math.min(i + 1, Math.max(manualQueue().length - 1, 0)));
+
+  /** FSM states owned by the round-flow screens (everything else stays lobby). */
+  const ROUND_STATES: ReadonlySet<Snapshot['state']> = new Set([
+    'CATEGORY',
+    'SCENARIO',
+    'SONG_SELECTION',
+    'LOCKED',
+    'PLAYBACK',
+  ]);
+  const inRoundFlow = () => ROUND_STATES.has(state());
 
   const joinUrl = `${location.origin}/player.html?code=${props.room.code}`;
 
@@ -81,7 +94,7 @@ export const HostLobby = (props: HostLobbyProps) => {
     setActionBusy(true);
     setActionError(null);
     try {
-      await apiRequest('/api/v1/host/start-game', {
+      await apiRequest(hostActionUrl(props.room.code, 'start_game'), {
         method: 'POST',
         headers: { authorization: `Bearer ${props.room.hostToken}` },
         body: JSON.stringify({}),
@@ -93,19 +106,37 @@ export const HostLobby = (props: HostLobbyProps) => {
     }
   };
 
-  /** CATEGORY → SCENARIO (POST /host/category). Placeholder picker for now. */
-  const pickCategory = async () => {
-    const chosen = category().trim();
+  /** CATEGORY → SCENARIO (POST /rooms/:code/host/pick_category). */
+  const [scenario, setScenario] = createSignal('');
+  const pickCategory = async (chosen: string) => {
     if (!chosen || actionBusy()) return;
     setActionBusy(true);
     setActionError(null);
     try {
-      await apiRequest('/api/v1/host/category', {
+      await apiRequest(hostActionUrl(props.room.code, 'pick_category'), {
         method: 'POST',
         headers: { authorization: `Bearer ${props.room.hostToken}` },
         body: JSON.stringify({ category: chosen }),
       });
-      setCategory('');
+      setScenario(chosen); // host-local mirror until snapshots carry the category
+    } catch (err) {
+      setActionError(err instanceof HostApiError ? errorText(err.code) : 'Something went wrong.');
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  /** LOCKED → PLAYBACK (POST /rooms/:code/host/begin_playback). */
+  const beginPlayback = async () => {
+    if (actionBusy()) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      await apiRequest(hostActionUrl(props.room.code, 'begin_playback'), {
+        method: 'POST',
+        headers: { authorization: `Bearer ${props.room.hostToken}` },
+        body: JSON.stringify({}),
+      });
     } catch (err) {
       setActionError(err instanceof HostApiError ? errorText(err.code) : 'Something went wrong.');
     } finally {
@@ -190,48 +221,35 @@ export const HostLobby = (props: HostLobbyProps) => {
           </div>
         </Show>
 
+        {/* Phase-3 round flow: the step screen per FSM state. */}
         <Show
-          when={state() === 'CATEGORY'}
+          when={inRoundFlow()}
           fallback={
             <button
               type="button"
               class="btn-primary btn-start"
-              disabled={players().length === 0 || actionBusy()}
+              disabled={players().length === 0 || actionBusy() || inRoundFlow()}
               onClick={() => void startGame()}
             >
               {actionBusy() ? 'Starting…' : 'Start Game ▶'}
             </button>
           }
         >
-          {/* Category picker placeholder — real category list arrives with Phase 2 backend. */}
-          <div class="category-picker" role="group" aria-label="Pick a category">
-            <input
-              class="p-input"
-              placeholder="category…"
-              value={category()}
-              onInput={(e) => setCategory(e.currentTarget.value)}
-              maxLength={40}
-              aria-label="Category"
-            />
-            <button
-              type="button"
-              class="btn-primary btn-start"
-              disabled={!category().trim() || actionBusy()}
-              onClick={() => void pickCategory()}
-            >
-              Lock Category ✓
-            </button>
-          </div>
-        </Show>
-
-        {/* D-E first-class manual mode: host playback card, only in manual rooms. */}
-        <Show when={snapshot()?.playbackMode === 'manual'}>
-          <ManualPlayback
-            queue={manualQueue()}
-            currentIndex={manualIndex()}
-            onAdvance={advanceManual}
-            playbackMode={snapshot()?.playbackMode}
-          />
+          <Show when={snapshot()}>
+            {(snap) => (
+              <RoundFlow
+                snapshot={snap()}
+                countdownSeconds={countdown()}
+                scenario={scenario()}
+                busy={actionBusy()}
+                queue={manualQueue()}
+                playbackIndex={manualIndex()}
+                onPickCategory={(c) => void pickCategory(c)}
+                onBeginPlayback={() => void beginPlayback()}
+                onManualAdvance={advanceManual}
+              />
+            )}
+          </Show>
         </Show>
       </Show>
     </main>

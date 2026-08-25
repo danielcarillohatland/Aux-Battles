@@ -27,6 +27,32 @@ import {
   tokenEncryptionKey,
 } from './providers/spotify/oauth.js';
 import { spotifyRoute } from './routes/spotify.js';
+import { FakeProvider } from './providers/fake/fake-provider.js';
+import {
+  SpotifyProvider,
+  type SpotifyTokenStore as PlaybackTokenStore,
+} from './providers/spotify/index.js';
+import type { MusicProvider } from './providers/music-provider.js';
+import { searchRoute } from './routes/search.js';
+import { SubmissionStore } from './core/submissions.js';
+import { roundsRoute } from './routes/rounds.js';
+import { RoundOrchestrator } from './core/round-orchestrator.js';
+
+/**
+ * Bridge the two token seams (Phase 2.5 oauth ↔ Phase 3 playback): the OAuth
+ * store is session-keyed while SpotifyProvider wants a bare getAccessToken().
+ * Single-host MVP: the most recently saved OAuth session IS the host's.
+ */
+function hostPlaybackTokens(store: EncryptedSpotifyTokenStore): PlaybackTokenStore {
+  return {
+    async getAccessToken() {
+      const session = store.latestSession();
+      if (session === null) return null; // host never OAuthed
+      const tokens = await store.load(session);
+      return tokens?.accessToken ?? null;
+    },
+  };
+}
 
 export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
   // Load .env (gitignored) for local dev — real env vars always win.
@@ -85,51 +111,113 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
     }
   });
 
-  // Phase-2 game runtime wiring (controller integration): FSM + timers +
-  // checkpointing + host controls + reclaim, all through the per-room mutex.
-  await log.register(gameRuntimesRoute({ roomManager, store, analytics }), { prefix: '/api/v1' });
-
   // Phase-2 realtime: read-mostly WS hub (D-D) — tickets, seq frames, heartbeat.
+  // Created BEFORE the runtime routes so kick/orchestrator wiring can use it.
   const wsHub = await initWsHub(log, { roomManager });
+
+  // Phase-3 round orchestration (AUX-006): one submission engine + one
+  // orchestrator bind the FSMs to snapshots, playback mode (D-E) and the
+  // placeholder judge handoff.
+  const submissions = new SubmissionStore();
+  const orchestrator = new RoundOrchestrator({
+    roomManager,
+    wsHub,
+    log: log.log,
+    submissions,
+  });
+
+  // Phase-2 game runtime wiring (controller integration): FSM + timers +
+  // checkpointing + host controls + reclaim + kick, all through the per-room
+  // mutex. Every transition flows to the orchestrator for broadcast/effects.
+  let runtimeAccess: {
+    getRoomPhase(code: string): { state: import('@aux/shared').FsmState; roundIdx: number } | null;
+    dispatchAllSubmitted(code: string): Promise<boolean>;
+  } | null = null;
+  await log.register(
+    gameRuntimesRoute({
+      roomManager,
+      store,
+      analytics,
+      wsHub,
+      orchestrator,
+      submissions,
+      exposeRuntime: (access) => {
+        runtimeAccess = access;
+      },
+    }),
+    {
+      prefix: '/api/v1',
+    },
+  );
 
   // Phase-2.5 Spotify spike (D-014): OAuth + encrypted token store. Registered
   // ONLY when credentials exist — the game runs fine without them (manual mode).
+  // The SAME branch picks the MusicProvider for the Phase-3 search proxy:
+  // SpotifyProvider when live, FakeProvider otherwise (deterministic catalog).
+  let provider: MusicProvider = new FakeProvider();
   const spotifyEnv = loadSpotifyEnv(env);
   if (spotifyEnv) {
     const oauth = new SpotifyOAuth(spotifyEnv);
     const tokenKey = tokenEncryptionKey(env, spotifyEnv.clientSecret);
+    const tokens = new EncryptedSpotifyTokenStore({ key: tokenKey, oauth });
     await log.register(
       spotifyRoute({
         oauth,
         states: new PkceStateStore(),
-        tokens: new EncryptedSpotifyTokenStore({ key: tokenKey, oauth }),
+        tokens,
       }),
       { prefix: '/api/v1' },
     );
+    provider = new SpotifyProvider({ tokenStore: hostPlaybackTokens(tokens) });
+    // L0 API playback (TDD §7): the same token bridge doubles as the live-
+    // session probe — null access token ⇒ manual mode per D-E.
+    orchestrator.setPlayback(provider, hostPlaybackTokens(tokens));
     log.log.info('Spotify OAuth routes registered (Dev Mode spike)');
   } else {
     log.log.warn('SPOTIFY_* env missing — OAuth disabled, manual playback only');
   }
-  wsHub.setSnapshotBuilder((code, viewer) => {
-    // Default LOBBY snapshot enriched with live FSM state when a runtime exists.
-    const room = roomManager.get(code);
-    if (room === undefined) return null;
-    return {
-      roomCode: code,
-      state: 'LOBBY',
-      roundIdx: 0,
-      phaseEndsAt: null,
-      playbackMode: 'manual', // D-E default mode
-      players: [...room.players.values()].map((p) => ({
-        nickname: p.nickname,
-        connected: p.connected,
-      })),
-      submissionsCount: 0,
-      you: { role: viewer.role, hasSubmitted: false, nickname: viewer.nickname },
-    };
+
+  // Search must NEVER 502 just because the host hasn't OAuthed yet (or the
+  // access token is stale): fall back to the deterministic FakeProvider
+  // catalog so song-picking always works. Live Spotify search resumes as
+  // soon as a session exists (provider swapped above).
+  const searchFallback = new FakeProvider();
+  await log.register(searchRoute({ provider, roomManager, fallback: searchFallback }), {
+    prefix: '/api/v1',
   });
 
-  return { app: log, cfg, analytics, roomManager, wsHub, store, stopTtlSweeper };
+  // Phase-3 submissions (TDD §6): idempotent, anonymous, quorum early-fire.
+  await log.register(
+    roundsRoute({
+      roomManager,
+      submissions,
+      getRoomPhase: (code) => {
+        const rt = runtimeAccess?.getRoomPhase(code);
+        return rt ?? null;
+      },
+      dispatchAllSubmitted: async (code) =>
+        (await runtimeAccess?.dispatchAllSubmitted(code)) ?? false,
+      broadcastSubmissionCount: (code, count) => {
+        wsHub.publish(code, { t: 'submission_received', count });
+      },
+    }),
+    { prefix: '/api/v1' },
+  );
+  // AUX-006: FSM-backed snapshot builder — state/roundIdx/phaseEndsAt from the
+  // live RoomFsm, real submission counts, per-viewer `you`, D-E playback mode.
+  wsHub.setSnapshotBuilder((code, viewer) => orchestrator.buildSnapshot(code, viewer));
+
+  return {
+    app: log,
+    cfg,
+    analytics,
+    roomManager,
+    wsHub,
+    store,
+    stopTtlSweeper,
+    submissions,
+    orchestrator,
+  };
 }
 
 const isMain =

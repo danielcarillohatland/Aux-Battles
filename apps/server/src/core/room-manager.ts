@@ -106,6 +106,21 @@ export class RoomManager {
     return this.rooms.get(code);
   }
 
+  /**
+   * Resolve a session-token hash to its room membership (search proxy auth:
+   * GET /search carries no room code, so membership is proven by token alone).
+   * O(rooms × members) — fine at party scale; swap for a hash index if the
+   * room count ever grows past a few hundred live rooms.
+   */
+  findMemberByTokenHash(tokenHash: string): { code: string; playerId: string } | undefined {
+    for (const [code, room] of this.rooms) {
+      for (const [playerId, player] of room.players) {
+        if (player.tokenHash === tokenHash) return { code, playerId };
+      }
+    }
+    return undefined;
+  }
+
   joinRoom(code: string, nickname: string, now: number = Date.now()): JoinRoomResult {
     const room = this.rooms.get(code);
     if (!room) throw new RoomNotFoundError();
