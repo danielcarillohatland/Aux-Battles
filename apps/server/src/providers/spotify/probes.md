@@ -18,8 +18,8 @@ Empirical results against the **real Spotify Web API** under Dev Mode. These dec
 
 These probes could not run with Client-Credentials. They were subsequently completed with host OAuth in the live-device section below:
 
-| #   | Probe                                   | Expected                                                        | Observed                          | Verdict          |
-| --- | --------------------------------------- | --------------------------------------------------------------- | --------------------------------- | ---------------- |
+| #   | Probe                                   | Expected                                                        | Observed                  | Verdict |
+| --- | --------------------------------------- | --------------------------------------------------------------- | ------------------------- | ------- |
 | P6  | Device list (`GET /me/player/devices`)  | ≥1 active Premium device visible                                | See live-device run below | ✅ PASS |
 | P7  | Transfer-playback latency & reliability | TDD §15 open item 2; informs verify-don't-drive polling cadence | See live-device run below | ✅ PASS |
 
