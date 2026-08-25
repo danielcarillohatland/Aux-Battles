@@ -5,6 +5,7 @@
  */
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import Fastify from 'fastify';
 import { loadConfig } from './core/config.js';
 import { Analytics, NdjsonAnalyticsSink } from './core/analytics.js';
@@ -17,8 +18,24 @@ import { SqliteRoomStore } from './core/room-store.js';
 import { startTtlSweeper } from './core/timers.js';
 import { ROOM_TTL_MS } from '@aux/shared';
 import { initWsHub } from './ws/index.js';
+import {
+  loadSpotifyEnv,
+  PkceStateStore,
+  SpotifyOAuth,
+  EncryptedSpotifyTokenStore,
+  tokenEncryptionKey,
+} from './providers/spotify/oauth.js';
+import { spotifyRoute } from './routes/spotify.js';
 
 export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
+  // Load .env (gitignored) for local dev — real env vars always win.
+  const envFile = resolve(process.cwd(), '.env');
+  if (existsSync(envFile)) {
+    for (const line of readFileSync(envFile, 'utf8').split('\n')) {
+      const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
+      if (m?.[1] !== undefined && m[2] !== undefined && env[m[1]] === undefined) env[m[1]] = m[2];
+    }
+  }
   const cfg = loadConfig(env);
   const log = Fastify({ logger: { level: cfg.logLevel } });
 
@@ -69,6 +86,25 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
 
   // Phase-2 realtime: read-mostly WS hub (D-D) — tickets, seq frames, heartbeat.
   const wsHub = await initWsHub(log, { roomManager });
+
+  // Phase-2.5 Spotify spike (D-014): OAuth + encrypted token store. Registered
+  // ONLY when credentials exist — the game runs fine without them (manual mode).
+  const spotifyEnv = loadSpotifyEnv(env);
+  if (spotifyEnv) {
+    const oauth = new SpotifyOAuth(spotifyEnv);
+    const tokenKey = tokenEncryptionKey(env, spotifyEnv.clientSecret);
+    await log.register(
+      spotifyRoute({
+        oauth,
+        states: new PkceStateStore(),
+        tokens: new EncryptedSpotifyTokenStore({ key: tokenKey, oauth }),
+      }),
+      { prefix: '/api/v1' },
+    );
+    log.log.info('Spotify OAuth routes registered (Dev Mode spike)');
+  } else {
+    log.log.warn('SPOTIFY_* env missing — OAuth disabled, manual playback only');
+  }
   wsHub.setSnapshotBuilder((code, viewer) => {
     // Default LOBBY snapshot enriched with live FSM state when a runtime exists.
     const room = roomManager.get(code);

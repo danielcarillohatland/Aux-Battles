@@ -14,6 +14,8 @@ import type { Snapshot } from '@aux/shared';
 import { apiRequest, HostApiError } from './api.js';
 import { errorText } from './errors.js';
 import { createHostRealtime } from './ws.js';
+import type { Track } from '@aux/shared';
+import { ManualPlayback } from './manual-playback.js';
 
 interface HostLobbyProps {
   room: { code: string; hostToken: string; playerId: string };
@@ -62,6 +64,14 @@ export const HostLobby = (props: HostLobbyProps) => {
   const connState = () => rt?.connState() ?? 'connecting';
 
   const degraded = () => connState() === 'reconnecting' || connState() === 'polling';
+
+  // D-E manual mode: the round queue mirror + host-driven index. The card is
+  // presentational; advancing flows back up through `advanceManual` (REST per
+  // D-D once the Phase 2.5 playback endpoints land — playback_cue payload).
+  const [manualQueue] = createSignal<Track[]>([]);
+  const [manualIndex, setManualIndex] = createSignal(0);
+  const advanceManual = () =>
+    setManualIndex((i) => Math.min(i + 1, Math.max(manualQueue().length - 1, 0)));
 
   const joinUrl = `${location.origin}/player.html?code=${props.room.code}`;
 
@@ -212,6 +222,16 @@ export const HostLobby = (props: HostLobbyProps) => {
               Lock Category ✓
             </button>
           </div>
+        </Show>
+
+        {/* D-E first-class manual mode: host playback card, only in manual rooms. */}
+        <Show when={snapshot()?.playbackMode === 'manual'}>
+          <ManualPlayback
+            queue={manualQueue()}
+            currentIndex={manualIndex()}
+            onAdvance={advanceManual}
+            playbackMode={snapshot()?.playbackMode}
+          />
         </Show>
       </Show>
     </main>

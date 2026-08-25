@@ -198,3 +198,139 @@
   color: inherit;
   font-size: 1.1rem;
 }
+
+/* ── Manual playback card (D-E: first-class) ───────────────────────────
+   Zero animation delays (owner condition #10): no transitions/keyframes —
+   every state change renders instantly. */
+
+.manual-card {
+  margin-top: clamp(1.5rem, 5vh, 3rem);
+  width: min(680px, 92vw);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(0.6rem, 1.5vh, 1.1rem);
+}
+.manual-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+}
+.manual-heading {
+  margin: 0;
+  font-size: clamp(1.2rem, 3vw, 1.8rem);
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+.mode-badge {
+  padding: 0.25rem 0.85rem;
+  border-radius: 999px;
+  font-size: clamp(0.8rem, 1.6vw, 1rem);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #fff;
+  background: #26263a;
+}
+.mode-badge[data-mode='api'] {
+  background: #1c7c46;
+}
+.mode-badge[data-mode='manual'] {
+  background: linear-gradient(100deg, #ff2fb4, #7c3aed);
+}
+.mode-badge[data-mode='silent'] {
+  background: #4a4a63;
+}
+.manual-paused {
+  margin: 0;
+  color: #ffb84d;
+  font-size: clamp(0.9rem, 2vw, 1.15rem);
+  font-weight: 700;
+}
+.manual-empty {
+  margin: 0;
+  color: #9b9bb4;
+  font-size: clamp(1rem, 2vw, 1.2rem);
+}
+
+/* Swipeable strip: native scroll-snap, instant recentering. */
+.manual-strip {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  width: 100%;
+  padding: 0.5rem 0;
+  -webkit-overflow-scrolling: touch;
+}
+.manual-track {
+  scroll-snap-align: center;
+  flex: 0 0 auto;
+  width: min(420px, 78%);
+  box-sizing: border-box;
+  border: 2px solid #26263a;
+  border-radius: 20px;
+  background: #14141f;
+  padding: clamp(1rem, 3vh, 1.75rem) 1.25rem;
+  opacity: 0.55;
+}
+.manual-track.active {
+  border-color: #ff2fb4;
+  opacity: 1;
+  box-shadow: 0 8px 30px rgb(255 47 180 / 0.25);
+}
+.manual-track-num {
+  color: #7c3aed;
+  font-weight: 800;
+  font-size: clamp(0.75rem, 1.5vw, 0.95rem);
+}
+.manual-title {
+  margin: 0.35rem 0 0;
+  font-size: clamp(1.4rem, 4vw, 2.4rem);
+  font-weight: 900;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+.manual-artist {
+  margin: 0.35rem 0 0;
+  color: #9b9bb4;
+  font-size: clamp(1rem, 2.4vw, 1.4rem);
+  overflow-wrap: anywhere;
+}
+.manual-album {
+  margin: 0.3rem 0 0;
+  color: #6d6d87;
+  font-size: clamp(0.8rem, 1.6vw, 1rem);
+}
+
+.manual-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.manual-dots {
+  display: flex;
+  gap: 0.45rem;
+}
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #26263a;
+}
+.dot.on {
+  background: linear-gradient(100deg, #ff2fb4, #7c3aed);
+}
+.manual-count {
+  color: #9b9bb4;
+  font-size: clamp(0.85rem, 1.6vw, 1.05rem);
+  font-weight: 700;
+}
+
+.btn-manual-next {
+  margin-top: clamp(0.5rem, 1.5vh, 1rem);
+  font-size: clamp(1.3rem, 3vw, 2rem);
+  padding: 1rem 3.5rem;
+  min-height: 48px;
+}
