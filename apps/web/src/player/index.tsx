@@ -5,14 +5,14 @@
 import { createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js';
 import { render } from 'solid-js/web';
 import { NICKNAME_MAX, NicknameSchema, RoomCodeSchema } from '@aux/shared';
+import type { Snapshot } from '@aux/shared';
 import '../shared-ui/shell.css';
 import './player.css';
-import { fetchPlayerCount, joinRoom } from './api.js';
+import { joinRoom } from './api.js';
 import type { JoinFailure } from './api.js';
 import { clearSession, loadSession, readUrlCode, saveSession } from './session.js';
 import type { PlayerSession } from './session.js';
-
-const POLL_MS = 3_000;
+import { createPlayerRealtime } from './ws.js';
 
 // ── Join screen ───────────────────────────────────────────────────────────────
 
@@ -167,30 +167,50 @@ const JoinScreen = (props: { onJoined: (s: PlayerSession) => void }) => {
 
 // ── Waiting screen ────────────────────────────────────────────────────────────
 
+/** Friendly FSM label shown live from the realtime snapshot. */
+const STATE_LABEL: Record<Snapshot['state'], string> = {
+  LOBBY: 'waiting for host…',
+  CATEGORY: 'host is picking a category',
+  SCENARIO: 'scenario incoming…',
+  SONG_SELECTION: 'pick your song!',
+  LOCKED: 'answers locked — good luck',
+  PLAYBACK: 'listening party 🎶',
+  AI_JUDGING: 'the judge deliberates…',
+  RESULTS: 'results are in',
+  LEADERBOARD: 'leaderboard time',
+  GAME_OVER: "that's a wrap!",
+};
+
 const WaitingScreen = (props: { session: PlayerSession; onLost: () => void }) => {
-  const [count, setCount] = createSignal<number | null>(null);
+  const [kickCopy, setKickCopy] = createSignal<string | null>(null);
 
+  // Realtime first (single WS per client, D-D); polling fallback is built in.
+  let rt!: ReturnType<typeof createPlayerRealtime>;
   onMount(() => {
-    let alive = true;
-
-    const poll = async () => {
-      const n = await fetchPlayerCount(props.session.code);
-      if (!alive) return;
-      if (n === null) {
+    rt = createPlayerRealtime({
+      code: props.session.code,
+      playerToken: props.session.playerToken,
+      onRoomGone: () => {
         clearSession(); // room's gone — dead ends are banned, so send them back to rejoin
         props.onLost();
-        return;
-      }
-      setCount(n);
-    };
-
-    void poll();
-    const t = setInterval(poll, POLL_MS);
-    onCleanup(() => {
-      alive = false;
-      clearInterval(t);
+      },
+      onTerminal: (ev) => {
+        if (ev.kind === 'room_closed') {
+          clearSession();
+          props.onLost();
+          return;
+        }
+        // Kicked: stay on screen with copy; the player can rejoin via back nav.
+        setKickCopy(`you were removed: ${ev.reason}`);
+      },
     });
   });
+  onCleanup(() => rt?.stop());
+
+  const state = (): Snapshot['state'] => rt?.snapshot()?.state ?? 'LOBBY';
+  const count = () => rt?.snapshot()?.players.length ?? null;
+  const countdown = () => rt?.countdownSeconds() ?? null;
+  const connState = () => rt?.connState() ?? 'connecting';
 
   return (
     <div class="p-screen">
@@ -203,7 +223,24 @@ const WaitingScreen = (props: { session: PlayerSession; onLost: () => void }) =>
         <p class="p-sub">
           {count() === null ? 'counting heads…' : `${count()} player${count() === 1 ? '' : 's'} in`}
         </p>
-        <p class="p-wait-copy">waiting for host…</p>
+        <Show when={countdown() !== null}>
+          <p class="p-countdown" role="timer">
+            {countdown()}s left
+          </p>
+        </Show>
+        {/* Live FSM state label straight off the realtime snapshot. */}
+        <p class="p-wait-copy" data-state={state()}>
+          {STATE_LABEL[state()]}
+          <Show when={connState() !== 'live'}>
+            {' '}
+            · {connState() === 'polling' ? '(polling)' : '(reconnecting…)'}
+          </Show>
+        </p>
+        <Show when={kickCopy()}>
+          <p class="p-error" role="alert">
+            {kickCopy()}
+          </p>
+        </Show>
         <p class="p-hint">keep this tab open — you're {props.session.code}</p>
       </div>
     </div>

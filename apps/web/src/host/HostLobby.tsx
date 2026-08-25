@@ -1,59 +1,107 @@
 /**
  * AUX BATTLES — Host Lobby (the "door", frontend-spec §2.2).
- * Giant code + QR to join + live player count via 2 s snapshot polling.
- * Polling failures never dead-end: last-known roster stays up under an amber
- * retry banner. Zero animation delays (owner condition #10).
+ * Giant code + QR to join + live player count. Realtime via a single WS
+ * connection (host/ws.ts, D-D); REST polling is the fallback when WS can't
+ * be established. Failures never dead-end: last-known roster stays up under
+ * an amber retry banner. Zero animation delays (owner condition #10).
+ *
+ * Phase 2 wiring: Start Game (LOBBY → CATEGORY) and a category picker
+ * placeholder (CATEGORY → SCENARIO) — both thin REST calls per D-D.
  */
 import { createSignal, createEffect, onCleanup, onMount, For, Show } from 'solid-js';
 import QRCode from 'qrcode';
 import type { Snapshot } from '@aux/shared';
 import { apiRequest, HostApiError } from './api.js';
 import { errorText } from './errors.js';
-
-const POLL_INTERVAL_MS = 2000;
+import { createHostRealtime } from './ws.js';
 
 interface HostLobbyProps {
   room: { code: string; hostToken: string; playerId: string };
 }
 
+/** Friendly label per FSM state — shown next to the connection dot. */
+const STATE_LABEL: Record<Snapshot['state'], string> = {
+  LOBBY: 'lobby',
+  CATEGORY: 'picking a category',
+  SCENARIO: 'scenario reveal',
+  SONG_SELECTION: 'song picking',
+  LOCKED: 'answers locked',
+  PLAYBACK: 'playback',
+  AI_JUDGING: 'the judge deliberates',
+  RESULTS: 'results',
+  LEADERBOARD: 'leaderboard',
+  GAME_OVER: 'game over',
+};
+
 export const HostLobby = (props: HostLobbyProps) => {
-  const [players, setPlayers] = createSignal<string[]>([]);
-  const [pollError, setPollError] = createSignal(false);
   const [fatal, setFatal] = createSignal<string | null>(null);
+  const [actionBusy, setActionBusy] = createSignal(false);
+  const [actionError, setActionError] = createSignal<string | null>(null);
+  const [category, setCategory] = createSignal('');
   let canvasRef: HTMLCanvasElement | undefined;
-  let timer: ReturnType<typeof setInterval> | undefined;
+
+  // Realtime engine: WS-first with built-in polling fallback + reconnect.
+  let rt!: ReturnType<typeof createHostRealtime>;
+  onMount(() => {
+    rt = createHostRealtime({
+      code: props.room.code,
+      hostToken: props.room.hostToken,
+      onRoomGone: () => setFatal(errorText('ROOM_NOT_FOUND')),
+      onTerminal: (ev) =>
+        setFatal(
+          ev.kind === 'kicked' ? 'You were removed from the room.' : errorText('ROOM_CLOSED'),
+        ),
+    });
+  });
+  onCleanup(() => rt?.stop());
+
+  const snapshot = () => rt?.snapshot() ?? null;
+  const players = () => snapshot()?.players ?? [];
+  const state = (): Snapshot['state'] => snapshot()?.state ?? 'LOBBY';
+  const countdown = () => rt?.countdownSeconds() ?? null;
+  const connState = () => rt?.connState() ?? 'connecting';
+
+  const degraded = () => connState() === 'reconnecting' || connState() === 'polling';
 
   const joinUrl = `${location.origin}/player.html?code=${props.room.code}`;
 
-  const poll = async () => {
+  /** LOBBY → CATEGORY (POST /host/start-game). */
+  const startGame = async () => {
+    if (actionBusy()) return;
+    setActionBusy(true);
+    setActionError(null);
     try {
-      const snap = await apiRequest<Snapshot>(
-        `/api/v1/rooms/${encodeURIComponent(props.room.code)}/snapshot`,
-        { headers: { authorization: `Bearer ${props.room.hostToken}` } },
-      );
-      setPlayers(snap.players.map((p) => p.nickname));
-      setPollError(false);
+      await apiRequest('/api/v1/host/start-game', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${props.room.hostToken}` },
+        body: JSON.stringify({}),
+      });
     } catch (err) {
-      // Room gone (expired/closed): stop polling, offer a way back — no dead UI.
-      if (
-        err instanceof HostApiError &&
-        (err.code === 'ROOM_NOT_FOUND' || err.code === 'ROOM_CLOSED')
-      ) {
-        setFatal(errorText(err.code));
-        if (timer !== undefined) clearInterval(timer);
-        return;
-      }
-      setPollError(true); // transient — keep roster visible, banner offers manual retry
+      setActionError(err instanceof HostApiError ? errorText(err.code) : 'Something went wrong.');
+    } finally {
+      setActionBusy(false);
     }
   };
 
-  onMount(() => {
-    void poll();
-    timer = setInterval(() => void poll(), POLL_INTERVAL_MS);
-  });
-  onCleanup(() => {
-    if (timer !== undefined) clearInterval(timer);
-  });
+  /** CATEGORY → SCENARIO (POST /host/category). Placeholder picker for now. */
+  const pickCategory = async () => {
+    const chosen = category().trim();
+    if (!chosen || actionBusy()) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      await apiRequest('/api/v1/host/category', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${props.room.hostToken}` },
+        body: JSON.stringify({ category: chosen }),
+      });
+      setCategory('');
+    } catch (err) {
+      setActionError(err instanceof HostApiError ? errorText(err.code) : 'Something went wrong.');
+    } finally {
+      setActionBusy(false);
+    }
+  };
 
   // Render QR once the canvas exists; re-render only if the URL changes.
   createEffect(() => {
@@ -93,14 +141,19 @@ export const HostLobby = (props: HostLobbyProps) => {
           <p class="join-url">{joinUrl}</p>
         </div>
 
-        <Show when={pollError()}>
-          <div class="banner banner-warn" role="status">
-            <span>Shaky connection… holding on 🤞</span>
-            <button type="button" class="btn-retry" onClick={() => void poll()}>
-              Retry now
-            </button>
-          </div>
-        </Show>
+        {/* Connection health: amber while reconnecting or on the polling fallback. */}
+        <div class="banner banner-warn" role="status" hidden={!degraded()}>
+          <span>
+            {connState() === 'polling'
+              ? 'Realtime unavailable — polling instead 🐢'
+              : 'Reconnecting…'}
+          </span>
+        </div>
+        <p class="lobby-label" data-state={state()}>
+          phase: {STATE_LABEL[state()]}
+          <Show when={countdown() !== null}> · {countdown()}s left</Show> ·{' '}
+          {connState() === 'live' ? '🟢 live' : '🟡 ' + connState()}
+        </p>
 
         <section class="roster">
           <h2>players joined: {players().length}</h2>
@@ -109,14 +162,57 @@ export const HostLobby = (props: HostLobbyProps) => {
             fallback={<p class="empty-roster">Nobody yet — share the QR! ↖</p>}
           >
             <ul>
-              <For each={players()}>{(nick) => <li>{nick}</li>}</For>
+              <For each={players()}>
+                {(p) => (
+                  <li classList={{ ghost: !p.connected }}>
+                    {p.nickname}
+                    <Show when={!p.connected}> 👻</Show>
+                  </li>
+                )}
+              </For>
             </ul>
           </Show>
         </section>
 
-        <button type="button" class="btn-primary btn-start" disabled>
-          Start Game (soon)
-        </button>
+        <Show when={actionError()}>
+          <div class="banner banner-error" role="alert">
+            <span>{actionError()}</span>
+          </div>
+        </Show>
+
+        <Show
+          when={state() === 'CATEGORY'}
+          fallback={
+            <button
+              type="button"
+              class="btn-primary btn-start"
+              disabled={players().length === 0 || actionBusy()}
+              onClick={() => void startGame()}
+            >
+              {actionBusy() ? 'Starting…' : 'Start Game ▶'}
+            </button>
+          }
+        >
+          {/* Category picker placeholder — real category list arrives with Phase 2 backend. */}
+          <div class="category-picker" role="group" aria-label="Pick a category">
+            <input
+              class="p-input"
+              placeholder="category…"
+              value={category()}
+              onInput={(e) => setCategory(e.currentTarget.value)}
+              maxLength={40}
+              aria-label="Category"
+            />
+            <button
+              type="button"
+              class="btn-primary btn-start"
+              disabled={!category().trim() || actionBusy()}
+              onClick={() => void pickCategory()}
+            >
+              Lock Category ✓
+            </button>
+          </div>
+        </Show>
       </Show>
     </main>
   );
