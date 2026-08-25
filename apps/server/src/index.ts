@@ -12,6 +12,10 @@ import { RoomManager } from './core/room-manager.js';
 import { healthRoute } from './routes/health.js';
 import { devRoute, type DebugState } from './routes/dev.js';
 import { roomsRoute } from './routes/rooms.js';
+import { gameRuntimesRoute } from './routes/game-runtimes.js';
+import { SqliteRoomStore } from './core/room-store.js';
+import { startTtlSweeper } from './core/timers.js';
+import { ROOM_TTL_MS } from '@aux/shared';
 import { initWsHub } from './ws/index.js';
 
 export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
@@ -44,10 +48,47 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
   const roomManager = new RoomManager();
   await log.register(roomsRoute({ roomManager, analytics }), { prefix: '/api/v1' });
 
+  // Phase-2 persistence (D-B): SQLite WAL checkpoints. ':memory:' in tests.
+  const store = new SqliteRoomStore(env.AUX_DB_FILE ?? ':memory:');
+  const stopTtlSweeper = startTtlSweeper(60_000, () => {
+    // TTL/cleanup ONLY (D-C) — never a state-advancer.
+    for (const code of store.codes()) {
+      const cp = store.get(code);
+      if (cp !== undefined) {
+        const state = cp.state as { phaseEndsAt?: number | null } | null;
+        if (state?.phaseEndsAt != null && Date.now() - cp.updatedAt > ROOM_TTL_MS) {
+          store.delete(code);
+        }
+      }
+    }
+  });
+
+  // Phase-2 game runtime wiring (controller integration): FSM + timers +
+  // checkpointing + host controls + reclaim, all through the per-room mutex.
+  await log.register(gameRuntimesRoute({ roomManager, store, analytics }), { prefix: '/api/v1' });
+
   // Phase-2 realtime: read-mostly WS hub (D-D) — tickets, seq frames, heartbeat.
   const wsHub = await initWsHub(log, { roomManager });
+  wsHub.setSnapshotBuilder((code, viewer) => {
+    // Default LOBBY snapshot enriched with live FSM state when a runtime exists.
+    const room = roomManager.get(code);
+    if (room === undefined) return null;
+    return {
+      roomCode: code,
+      state: 'LOBBY',
+      roundIdx: 0,
+      phaseEndsAt: null,
+      playbackMode: 'manual', // D-E default mode
+      players: [...room.players.values()].map((p) => ({
+        nickname: p.nickname,
+        connected: p.connected,
+      })),
+      submissionsCount: 0,
+      you: { role: viewer.role, hasSubmitted: false, nickname: viewer.nickname },
+    };
+  });
 
-  return { app: log, cfg, analytics, roomManager, wsHub };
+  return { app: log, cfg, analytics, roomManager, wsHub, store, stopTtlSweeper };
 }
 
 const isMain =

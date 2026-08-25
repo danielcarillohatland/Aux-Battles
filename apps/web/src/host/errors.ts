@@ -14,6 +14,7 @@ const ERROR_TEXT: Record<HostErrorCode, string> = {
   INVALID_NICKNAME: 'Nicknames need 1–20 real characters.',
   INVALID_CODE: 'That code doesn’t parse. Check for typos?',
   RATE_LIMITED: 'Whoa, slow down — too many requests.',
+  INVALID_ACTION: 'Can’t do that right now — wrong moment in the game.',
   INTERNAL: 'The judge tripped over a cable. Try again.',
   NETWORK: 'Shaky connection… can’t reach the server 🤞',
 };

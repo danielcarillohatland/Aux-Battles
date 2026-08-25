@@ -12,6 +12,7 @@ export const ERROR_CODES = [
   'INVALID_NICKNAME',
   'INVALID_CODE',
   'RATE_LIMITED',
+  'INVALID_ACTION',
   'INTERNAL',
 ] as const;
 
