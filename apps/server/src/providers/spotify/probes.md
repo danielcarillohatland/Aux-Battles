@@ -14,14 +14,14 @@ Empirical results against the **real Spotify Web API** under Dev Mode. These dec
 | P4  | `preview_url` availability (known track `4cOdK2wGLETKBW3PvgPWqT` + 10-track search sample) | TDD presumes previews dead in Dev Mode → expect all null            | Known track: `preview_url` **absent/null**. Sample of 10 tracks: **0/10 have previews** | 💀 PREVIEWS CONFIRMED DEAD — manual-mode path (L4) stands; `getPreviewClip` can be cut from scope                                                             |
 | P5  | Rate-limit burst: 20 rapid sequential searches (~8.8 s total)                              | Some 429 threshold exists; record trip point + `Retry-After` values | All **20 requests → HTTP 200**, zero 429s, zero `Retry-After` headers                   | 🟢 NO LIMIT HIT at this scale — ceiling >20 rapid searches; normal polling cadence is far below risk. Circuit breaker on 429 still required but untested here |
 
-## TODO(AUX-001) — requires host OAuth (Premium)
+## Initial catalog-only run (superseded)
 
-These probes are stubbed in the script and print `needs host OAuth`. They cannot run with Client-Credentials:
+These probes could not run with Client-Credentials. They were subsequently completed with host OAuth in the live-device section below:
 
 | #   | Probe                                   | Expected                                                        | Observed                          | Verdict          |
 | --- | --------------------------------------- | --------------------------------------------------------------- | --------------------------------- | ---------------- |
-| P6  | Device list (`GET /me/player/devices`)  | ≥1 active Premium device visible                                | _not runnable without host OAuth_ | ⏳ TODO(AUX-001) |
-| P7  | Transfer-playback latency & reliability | TDD §15 open item 2; informs verify-don't-drive polling cadence | _not runnable without host OAuth_ | ⏳ TODO(AUX-001) |
+| P6  | Device list (`GET /me/player/devices`)  | ≥1 active Premium device visible                                | See live-device run below | ✅ PASS |
+| P7  | Transfer-playback latency & reliability | TDD §15 open item 2; informs verify-don't-drive polling cadence | See live-device run below | ✅ PASS |
 
 ## Engineering consequences
 

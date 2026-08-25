@@ -31,6 +31,7 @@ import type { FsmChange } from '../fsm/types.js';
 import type { WsHub, WsViewer } from '../ws/types.js';
 import type { MusicProvider } from '../providers/music-provider.js';
 import type { StoredSubmission } from './submissions.js';
+import { fallbackJudge, type JudgeService, type JudgedEntry } from '../judge/judge-service.js';
 
 /**
  * Read-only view of the submission engine (core/submissions.ts implements this
@@ -71,6 +72,24 @@ export interface RoundOrchestratorOptions {
   submissions?: SubmissionStoreView | undefined;
   /** Verify-poll cadence override (tests inject small values). */
   pollMs?: number | undefined;
+  judge?: JudgeService | undefined;
+}
+
+export interface OrchestratorPayload {
+  version: 1;
+  category?: string;
+  scenario?: string;
+  queue?: StoredSubmission[];
+  playbackIndex?: number;
+  playbackMode?: PlaybackMode;
+  results?: JudgedEntry[];
+  revealIndex?: number;
+  leaderboard?: Array<{
+    playerId: string;
+    nickname: string;
+    totalScore: number;
+    wins: number;
+  }>;
 }
 
 /** Verify-don't-drive cadence (TDD §7: 5–10 s). */
@@ -112,6 +131,7 @@ interface QueueWatch {
 }
 
 export class RoundOrchestrator {
+  onChanged: ((code: string) => void) | null = null;
   private hub: WsHub | undefined;
   private provider: MusicProvider | undefined;
   private probe: LiveSessionProbe | undefined;
@@ -121,11 +141,30 @@ export class RoundOrchestrator {
   private readonly fsms = new Map<string, RoomFsm>();
   /** Cached D-E mode per room; sync-readable by the snapshot builder. */
   private readonly playbackModes = new Map<string, PlaybackMode>();
+  private readonly categories = new Map<string, string>();
+  private readonly scenarios = new Map<string, string>();
+  private readonly queues = new Map<string, StoredSubmission[]>();
+  private readonly playbackIndexes = new Map<string, number>();
+  private readonly results = new Map<string, JudgedEntry[]>();
+  private readonly revealIndexes = new Map<string, number>();
+  private readonly judging = new Set<string>();
+  private readonly leaderboard = new Map<
+    string,
+    Map<string, { playerId: string; nickname: string; totalScore: number; wins: number }>
+  >();
   private readonly watches = new Map<string, QueueWatch>();
   private readonly timers = new TimerService();
 
   constructor(private readonly opts: RoundOrchestratorOptions) {
     this.hub = opts.wsHub;
+  }
+
+  private checkpoint(code: string): void {
+    try {
+      this.onChanged?.(code);
+    } catch {
+      // Persistence is best-effort; gameplay remains authoritative in memory.
+    }
   }
 
   /** Composition-root wiring once the WS hub exists. */
@@ -151,6 +190,44 @@ export class RoundOrchestrator {
     this.opts.submissions = store;
   }
 
+  serialize(code: string): OrchestratorPayload {
+    const payload: OrchestratorPayload = { version: 1 };
+    const category = this.categories.get(code);
+    const queue = this.queues.get(code);
+    const scenario = this.scenarios.get(code);
+    const playbackIndex = this.playbackIndexes.get(code);
+    const playbackMode = this.playbackModes.get(code);
+    const results = this.results.get(code);
+    const revealIndex = this.revealIndexes.get(code);
+    const leaderboard = this.leaderboard.get(code);
+    if (category !== undefined) payload.category = category;
+    if (scenario !== undefined) payload.scenario = scenario;
+    if (queue !== undefined) payload.queue = queue;
+    if (playbackIndex !== undefined) payload.playbackIndex = playbackIndex;
+    if (playbackMode !== undefined) payload.playbackMode = playbackMode;
+    if (results !== undefined) payload.results = results;
+    if (revealIndex !== undefined) payload.revealIndex = revealIndex;
+    if (leaderboard !== undefined) payload.leaderboard = [...leaderboard.values()];
+    return payload;
+  }
+
+  hydrate(code: string, payload: OrchestratorPayload | null | undefined): void {
+    if (payload?.version !== 1) return;
+    if (payload.category !== undefined) this.categories.set(code, payload.category);
+    if (payload.scenario !== undefined) this.scenarios.set(code, payload.scenario);
+    if (payload.queue !== undefined) this.queues.set(code, payload.queue);
+    if (payload.playbackIndex !== undefined) this.playbackIndexes.set(code, payload.playbackIndex);
+    if (payload.playbackMode !== undefined) this.playbackModes.set(code, payload.playbackMode);
+    if (payload.results !== undefined) this.results.set(code, payload.results);
+    if (payload.revealIndex !== undefined) this.revealIndexes.set(code, payload.revealIndex);
+    if (payload.leaderboard !== undefined) {
+      this.leaderboard.set(
+        code,
+        new Map(payload.leaderboard.map((entry) => [entry.playerId, entry])),
+      );
+    }
+  }
+
   // ── Runtime registry (fed by game-runtimes.ts) ──────────────────────────────
 
   /** Register a room's FSM; re-arms the placeholder-judge deadline after rehydration. */
@@ -164,6 +241,14 @@ export class RoundOrchestrator {
   forget(code: string): void {
     this.fsms.delete(code);
     this.playbackModes.delete(code);
+    this.categories.delete(code);
+    this.scenarios.delete(code);
+    this.queues.delete(code);
+    this.playbackIndexes.delete(code);
+    this.results.delete(code);
+    this.revealIndexes.delete(code);
+    this.judging.delete(code);
+    this.leaderboard.delete(code);
     this.stopQueueWatch(code);
     this.timers.disarm(`judge:${code}`);
   }
@@ -178,6 +263,26 @@ export class RoundOrchestrator {
   onTransition(change: FsmChange): void {
     // Refresh the cached mode opportunistically (sync snapshot reads stay cheap).
     void this.refreshSessionLiveness(change.code);
+    if (change.event === 'PICK_CATEGORY' && change.payload?.category !== undefined) {
+      this.categories.set(change.code, change.payload.category);
+      this.scenarios.set(
+        change.code,
+        `You get one song to define “${change.payload.category}” for the whole room. What do you play?`,
+      );
+    }
+    if (change.event === 'NEXT_ROUND') {
+      this.queues.delete(change.code);
+      this.playbackIndexes.delete(change.code);
+      this.results.delete(change.code);
+      this.revealIndexes.delete(change.code);
+    }
+    if (change.from === 'RESULTS' && change.event === 'ADVANCE_REVEAL') {
+      const total = this.results.get(change.code)?.length ?? 0;
+      this.revealIndexes.set(
+        change.code,
+        Math.min(total, (this.revealIndexes.get(change.code) ?? 0) + 1),
+      );
+    }
 
     switch (change.to) {
       case 'PLAYBACK':
@@ -185,12 +290,14 @@ export class RoundOrchestrator {
         break;
       case 'AI_JUDGING':
         this.armJudgeTimer(change.code, change.phaseEndsAt ?? Date.now() + AI_JUDGING_TIMEOUT_MS);
+        void this.startJudging(change.code);
         break;
       default:
         break;
     }
     if (change.from === 'AI_JUDGING') this.timers.disarm(`judge:${change.code}`);
 
+    this.checkpoint(change.code);
     this.broadcast(change.code);
   }
 
@@ -210,6 +317,9 @@ export class RoundOrchestrator {
     const roundIdx = fsm?.roundIdx ?? 0;
     const roundId = roundIdOf(code, roundIdx);
     const subs = this.opts.submissions;
+    const allResults = this.results.get(code) ?? [];
+    const visibleResultCount =
+      state === 'RESULTS' ? (this.revealIndexes.get(code) ?? 0) : allResults.length;
 
     return {
       roomCode: code,
@@ -217,11 +327,27 @@ export class RoundOrchestrator {
       roundIdx,
       phaseEndsAt: fsm?.phaseEndsAt ?? null,
       playbackMode: this.playbackModes.get(code) ?? 'manual',
-      players: [...room.players.values()].map((p) => ({
-        nickname: p.nickname,
-        connected: p.connected,
-      })),
+      players: [...room.players.entries()]
+        .filter(([id]) => id !== room.hostPlayerId)
+        .map(([, p]) => ({ nickname: p.nickname, connected: p.connected })),
       submissionsCount: subs?.count(roundId) ?? 0,
+      category: this.categories.get(code) ?? null,
+      scenario: this.scenarios.get(code) ?? null,
+      queue: (this.queues.get(code) ?? []).map((submission) => submission.track),
+      playbackIndex: this.playbackIndexes.get(code) ?? 0,
+      results: allResults.slice(0, visibleResultCount).map((result) => ({
+        rank: result.rank,
+        score: result.score,
+        explanation: result.explanation,
+        track: result.track,
+        owner: room.players.get(result.playerId)?.nickname ?? 'Mystery DJ',
+        chicken: result.chicken,
+      })),
+      resultCount: allResults.length,
+      revealIndex: visibleResultCount,
+      leaderboard: [...(this.leaderboard.get(code)?.values() ?? [])].sort(
+        (a, b) => b.totalScore - a.totalScore || b.wins - a.wins,
+      ),
       you: {
         role: viewer.role,
         hasSubmitted: subs?.hasSubmitted(roundId, viewer.playerId) ?? false,
@@ -242,8 +368,10 @@ export class RoundOrchestrator {
     const fsm = this.fsms.get(code);
     if (fsm === undefined || fsm.state !== 'PLAYBACK') return;
 
-    const subs = this.opts.submissions?.list(roundIdOf(code, fsm.roundIdx)) ?? [];
-    const uris = shuffled(subs.map((s) => trackUri(s.track.id)));
+    const subs = shuffled(this.opts.submissions?.list(roundIdOf(code, fsm.roundIdx)) ?? []);
+    this.queues.set(code, subs);
+    this.playbackIndexes.set(code, 0);
+    const uris = subs.map((s) => trackUri(s.track.id));
 
     let mode: PlaybackMode = 'manual';
     if (this.provider !== undefined && (await this.hasLiveSession()) && uris.length > 0) {
@@ -265,7 +393,24 @@ export class RoundOrchestrator {
     }
 
     this.playbackModes.set(code, mode);
+    this.checkpoint(code);
     this.broadcast(code);
+  }
+
+  /** Host-driven L4 progression. Ownership stays server-side and anonymous. */
+  async manualNext(code: string): Promise<'advanced' | 'done' | 'invalid'> {
+    const fsm = this.fsms.get(code);
+    if (fsm === undefined || fsm.state !== 'PLAYBACK') return 'invalid';
+    const queue = this.queues.get(code) ?? [];
+    const current = this.playbackIndexes.get(code) ?? 0;
+    if (queue.length === 0 || current >= queue.length - 1) {
+      await this.dispatchQuietly(fsm, 'QUEUE_DONE');
+      return 'done';
+    }
+    this.playbackIndexes.set(code, current + 1);
+    this.checkpoint(code);
+    this.broadcast(code);
+    return 'advanced';
   }
 
   private async hasLiveSession(): Promise<boolean> {
@@ -364,10 +509,10 @@ export class RoundOrchestrator {
     }
   }
 
-  // ── Placeholder judge handoff (real judge lands Phase 4) ────────────────────
+  // ── Batched judging + leaderboard ──────────────────────────────────────────
 
   private armJudgeTimer(code: string, deadline: number): void {
-    this.timers.arm(`judge:${code}`, deadline, () => void this.storePlaceholderJudgement(code));
+    this.timers.arm(`judge:${code}`, deadline, () => void this.finishWithFallback(code));
   }
 
   /**
@@ -375,10 +520,68 @@ export class RoundOrchestrator {
    * log, then immediately dispatch JUDGEMENT_STORED with placeholder results so
    * RESULTS/LEADERBOARD are reachable end-to-end before the judge exists.
    */
-  private async storePlaceholderJudgement(code: string): Promise<void> {
+  private async startJudging(code: string): Promise<void> {
     const fsm = this.fsms.get(code);
     if (fsm === undefined || fsm.state !== 'AI_JUDGING') return;
-    this.opts.log?.info({ code, placeholder: true }, 'placeholder judge: storing judgement');
+    const roundId = roundIdOf(code, fsm.roundIdx);
+    if (this.judging.has(roundId) || this.results.has(code)) return;
+    this.judging.add(roundId);
+    const entries = (this.opts.submissions?.list(roundId) ?? []).map((submission) => ({
+      playerId: submission.playerId,
+      track: submission.track,
+      chicken: submission.chicken,
+    }));
+    const scenario = this.scenarios.get(code) ?? 'the perfect song for this chaotic moment';
+    const judged =
+      this.opts.judge === undefined
+        ? fallbackJudge(scenario, entries)
+        : await this.opts.judge.judge(scenario, entries);
+    await this.storeJudgement(code, roundId, judged);
+  }
+
+  private async finishWithFallback(code: string): Promise<void> {
+    const fsm = this.fsms.get(code);
+    if (fsm === undefined || fsm.state !== 'AI_JUDGING') return;
+    const roundId = roundIdOf(code, fsm.roundIdx);
+    const entries = (this.opts.submissions?.list(roundId) ?? []).map((submission) => ({
+      playerId: submission.playerId,
+      track: submission.track,
+      chicken: submission.chicken,
+    }));
+    const judged = fallbackJudge(this.scenarios.get(code) ?? '', entries);
+    await this.storeJudgement(code, roundId, judged);
+  }
+
+  private async storeJudgement(
+    code: string,
+    roundId: string,
+    judged: JudgedEntry[],
+  ): Promise<void> {
+    const fsm = this.fsms.get(code);
+    if (fsm === undefined || fsm.state !== 'AI_JUDGING' || this.results.has(code)) return;
+    const worstFirst = [...judged].sort((a, b) => b.rank - a.rank);
+    this.results.set(code, worstFirst);
+    this.revealIndexes.set(code, 0);
+    const room = this.opts.roomManager.get(code);
+    let board = this.leaderboard.get(code);
+    if (board === undefined) {
+      board = new Map();
+      this.leaderboard.set(code, board);
+    }
+    for (const result of judged) {
+      const current = board.get(result.playerId) ?? {
+        playerId: result.playerId,
+        nickname: room?.players.get(result.playerId)?.nickname ?? 'Mystery DJ',
+        totalScore: 0,
+        wins: 0,
+      };
+      current.totalScore += result.score;
+      if (result.rank === 1) current.wins += 1;
+      board.set(result.playerId, current);
+    }
+    this.judging.delete(roundId);
+    this.checkpoint(code);
+    this.timers.disarm(`judge:${code}`);
     await this.dispatchQuietly(fsm, 'JUDGEMENT_STORED');
   }
 

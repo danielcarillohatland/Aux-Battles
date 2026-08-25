@@ -8,16 +8,17 @@ import { dirname, resolve } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
+import fastifyStatic from '@fastify/static';
 import { loadConfig } from './core/config.js';
 import { Analytics, NdjsonAnalyticsSink } from './core/analytics.js';
-import { RoomManager } from './core/room-manager.js';
+import { RoomManager, type SerializedRoom } from './core/room-manager.js';
 import { healthRoute } from './routes/health.js';
 import { devRoute, type DebugState } from './routes/dev.js';
 import { roomsRoute } from './routes/rooms.js';
 import { gameRuntimesRoute } from './routes/game-runtimes.js';
 import { SqliteRoomStore } from './core/room-store.js';
 import { startTtlSweeper } from './core/timers.js';
-import { ROOM_TTL_MS } from '@aux/shared';
+import { EMPTY_ROOM_TTL_MS, ROOM_TTL_MS } from '@aux/shared';
 import { initWsHub } from './ws/index.js';
 import {
   loadSpotifyEnv,
@@ -37,6 +38,8 @@ import { searchRoute } from './routes/search.js';
 import { SubmissionStore } from './core/submissions.js';
 import { roundsRoute } from './routes/rounds.js';
 import { RoundOrchestrator } from './core/round-orchestrator.js';
+import { JudgeService } from './judge/judge-service.js';
+import { OpenRouterProvider } from './judge/openrouter-provider.js';
 
 /**
  * Bridge the two token seams (Phase 2.5 oauth ↔ Phase 3 playback): the OAuth
@@ -68,7 +71,10 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
     }
   }
   const cfg = loadConfig(env);
-  const log = Fastify({ logger: { level: cfg.logLevel } });
+  const log = Fastify({
+    logger: { level: cfg.logLevel },
+    trustProxy: env.AUX_TRUST_PROXY === '1',
+  });
 
   // Analytics bus (D-010): dev/test default to an NDJSON file under var/.
   const analyticsPath = env.AUX_ANALYTICS_FILE ?? null;
@@ -98,15 +104,29 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
 
   // Phase-2 persistence (D-B): SQLite WAL checkpoints. ':memory:' in tests.
   const store = new SqliteRoomStore(env.AUX_DB_FILE ?? ':memory:');
+  // Rehydrate durable rosters before any runtime/WS authentication occurs.
+  for (const code of store.codes()) {
+    const checkpoint = store.get(code)?.state as { room?: SerializedRoom | null } | undefined;
+    if (checkpoint?.room != null) roomManager.hydrate(code, checkpoint.room);
+  }
+  const expireRoom = (code: string, reason: string): void => {
+    wsHub.closeRoom(code, reason);
+    orchestrator.forget(code);
+    submissions.clearRoom(code);
+    roomManager.delete(code);
+    store.delete(code);
+  };
   const stopTtlSweeper = startTtlSweeper(60_000, () => {
     // TTL/cleanup ONLY (D-C) — never a state-advancer.
     for (const code of store.codes()) {
       const cp = store.get(code);
       if (cp !== undefined) {
-        const state = cp.state as { phaseEndsAt?: number | null } | null;
-        if (state?.phaseEndsAt != null && Date.now() - cp.updatedAt > ROOM_TTL_MS) {
-          store.delete(code);
-        }
+        const room = roomManager.get(code);
+        const hardExpired = room !== undefined && Date.now() - room.createdAt >= ROOM_TTL_MS;
+        const empty = room === undefined || [...room.players.values()].every((p) => !p.connected);
+        const emptyExpired = empty && Date.now() - cp.updatedAt >= EMPTY_ROOM_TTL_MS;
+        if (hardExpired || emptyExpired)
+          expireRoom(code, hardExpired ? 'room expired' : 'room empty');
       }
     }
   });
@@ -117,13 +137,23 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
 
   // Phase-3 round orchestration (AUX-006): one submission engine + one
   // orchestrator bind the FSMs to snapshots, playback mode (D-E) and the
-  // placeholder judge handoff.
+  // validated batched judge + deterministic fallback.
   const submissions = new SubmissionStore();
+  const openRouterKey = env.OPENROUTER_API_KEY?.trim();
+  const judge = new JudgeService(
+    openRouterKey
+      ? new OpenRouterProvider(openRouterKey, env.OPENROUTER_MODEL ?? 'google/gemini-2.0-flash-001')
+      : undefined,
+    {
+      maxCalls: Number(env.AUX_LLM_MAX_CALLS ?? 1_000),
+    },
+  );
   const orchestrator = new RoundOrchestrator({
     roomManager,
     wsHub,
     log: log.log,
     submissions,
+    judge,
   });
 
   // Phase-2 game runtime wiring (controller integration): FSM + timers +
@@ -165,6 +195,8 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
         oauth,
         states: new PkceStateStore(),
         tokens,
+        devMode: cfg.devMode,
+        secureCookies: env.NODE_ENV === 'production',
       }),
       { prefix: '/api/v1' },
     );
@@ -206,6 +238,39 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
   // AUX-006: FSM-backed snapshot builder — state/roundIdx/phaseEndsAt from the
   // live RoomFsm, real submission counts, per-viewer `you`, D-E playback mode.
   wsHub.setSnapshotBuilder((code, viewer) => orchestrator.buildSnapshot(code, viewer));
+  debug.getRooms = () =>
+    roomManager.entries().map(([code, room]) => {
+      const phase = runtimeAccess?.getRoomPhase(code);
+      const snap = orchestrator.buildSnapshot(code, {
+        playerId: room.hostPlayerId,
+        role: 'host',
+        nickname: room.players.get(room.hostPlayerId)?.nickname ?? null,
+      });
+      return {
+        code,
+        state: phase?.state ?? 'LOBBY',
+        roundIdx: phase?.roundIdx ?? 0,
+        players: room.players.size,
+        connectedPlayers: [...room.players.values()].filter((player) => player.connected).length,
+        submissionsCount: snap?.submissionsCount ?? 0,
+        playbackMode: snap?.playbackMode ?? 'manual',
+        phaseEndsAt: snap?.phaseEndsAt ?? null,
+      };
+    });
+
+  // Production is one deployable: serve the built Solid clients from the
+  // same origin as REST/WS. Development still uses Vite when dist is absent.
+  const webDist = resolve(repoRoot, 'apps/web/dist');
+  if (existsSync(webDist)) {
+    await log.register(fastifyStatic, { root: webDist, wildcard: true });
+    log.get('/', async (_req, reply) => reply.redirect('/host.html'));
+  }
+
+  log.addHook('onClose', async () => {
+    stopTtlSweeper();
+    store.close();
+    await analytics.flush();
+  });
 
   return {
     app: log,
@@ -223,11 +288,10 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
 const isMain =
   process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1].split('/').pop() ?? '');
 if (isMain) {
-  const { app, cfg, analytics } = await buildServer();
+  const { app, cfg } = await buildServer();
   // Graceful shutdown on SIGINT *and* SIGTERM (containers/orchestrators send
   // SIGTERM): flush analytics before the process drops them.
   const shutdown = () => {
-    analytics.flush();
     void app.close();
   };
   process.on('SIGINT', shutdown);

@@ -12,7 +12,12 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest 
 import { CreateRoomRequestSchema, NicknameSchema, RoomCodeSchema, apiError } from '@aux/shared';
 import type { Analytics } from '../core/analytics.js';
 import { createRateLimiter, type RateLimiter } from '../core/rate-limit.js';
-import { NameTakenError, RoomManager, RoomNotFoundError } from '../core/room-manager.js';
+import {
+  JoinClosedError,
+  NameTakenError,
+  RoomManager,
+  RoomNotFoundError,
+} from '../core/room-manager.js';
 
 export interface RoomsRouteOptions {
   roomManager: RoomManager;
@@ -71,6 +76,9 @@ export function roomsRoute(opts: RoomsRouteOptions): FastifyPluginAsync {
             return reply
               .code(409)
               .send(apiError('NAME_TAKEN', 'nickname already in use in this room'));
+          }
+          if (err instanceof JoinClosedError) {
+            return reply.code(409).send(apiError('INVALID_ACTION', 'joining is closed this round'));
           }
           if (
             err instanceof RoomNotFoundError ||

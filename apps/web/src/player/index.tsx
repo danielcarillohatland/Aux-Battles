@@ -17,6 +17,7 @@ import { clearSubmissionIfStale, loadSubmission } from './submission-store.js';
 import type { SubmissionRecord } from './submission-store.js';
 import { SongSelection } from './SongSelection.js';
 import { SealedScreen } from './SealedScreen.js';
+import { PlayerPostRound } from './PostRound.js';
 
 // ── Join screen ───────────────────────────────────────────────────────────────
 
@@ -252,39 +253,48 @@ const WaitingScreen = (props: { session: PlayerSession; onLost: () => void }) =>
         <Show
           when={showSealed()}
           fallback={
-            <div class="p-screen">
-              <header class="p-head">
-                <h1>AUX ⚔ BATTLES</h1>
-              </header>
-              <div class="p-card p-waiting">
-                <p class="p-in">you're in, {props.session.nickname} 🎧</p>
-                <span class="p-dot" aria-hidden="true" />
-                <p class="p-sub">
-                  {count() === null
-                    ? 'counting heads…'
-                    : `${count()} player${count() === 1 ? '' : 's'} in`}
-                </p>
-                <Show when={countdown() !== null}>
-                  <p class="p-countdown" role="timer">
-                    {countdown()}s left
-                  </p>
-                </Show>
-                {/* Live FSM state label straight off the realtime snapshot. */}
-                <p class="p-wait-copy" data-state={state()}>
-                  {STATE_LABEL[state()]}
-                  <Show when={connState() !== 'live'}>
-                    {' '}
-                    · {connState() === 'polling' ? '(polling)' : '(reconnecting…)'}
-                  </Show>
-                </p>
-                <Show when={kickCopy()}>
-                  <p class="p-error" role="alert">
-                    {kickCopy()}
-                  </p>
-                </Show>
-                <p class="p-hint">keep this tab open — you're {props.session.code}</p>
-              </div>
-            </div>
+            <Show
+              when={state() === 'RESULTS' || state() === 'LEADERBOARD' || state() === 'GAME_OVER'}
+              fallback={
+                <div class="p-screen">
+                  <header class="p-head">
+                    <h1>AUX ⚔ BATTLES</h1>
+                  </header>
+                  <div class="p-card p-waiting">
+                    <p class="p-in">you're in, {props.session.nickname} 🎧</p>
+                    <span class="p-dot" aria-hidden="true" />
+                    <p class="p-sub">
+                      {count() === null
+                        ? 'counting heads…'
+                        : `${count()} player${count() === 1 ? '' : 's'} in`}
+                    </p>
+                    <Show when={countdown() !== null}>
+                      <p class="p-countdown" role="timer">
+                        {countdown()}s left
+                      </p>
+                    </Show>
+                    {/* Live FSM state label straight off the realtime snapshot. */}
+                    <p class="p-wait-copy" data-state={state()}>
+                      {STATE_LABEL[state()]}
+                      <Show when={connState() !== 'live'}>
+                        {' '}
+                        · {connState() === 'polling' ? '(polling)' : '(reconnecting…)'}
+                      </Show>
+                    </p>
+                    <Show when={kickCopy()}>
+                      <p class="p-error" role="alert">
+                        {kickCopy()}
+                      </p>
+                    </Show>
+                    <p class="p-hint">keep this tab open — you're {props.session.code}</p>
+                  </div>
+                </div>
+              }
+            >
+              <Show when={rt?.snapshot()} keyed>
+                {(snap) => <PlayerPostRound snapshot={snap} nickname={props.session.nickname} />}
+              </Show>
+            </Show>
           }
         >
           <SealedScreen

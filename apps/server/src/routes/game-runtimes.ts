@@ -10,7 +10,7 @@
 import { RoomCodeSchema, apiError } from '@aux/shared';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { Analytics } from '../core/analytics.js';
-import type { RoomManager } from '../core/room-manager.js';
+import type { RoomManager, SerializedRoom } from '../core/room-manager.js';
 import type { RoomStore } from '../core/room-store.js';
 import { TimerService } from '../core/timers.js';
 import { RoomFsm } from '../fsm/engine.js';
@@ -18,11 +18,11 @@ import { IllegalTransitionError } from '../fsm/types.js';
 import type { FsmEvent, TransitionPayload } from '../fsm/types.js';
 import type { FsmState } from '@aux/shared';
 import { submitRandomForMissing } from './rounds.js';
-import type { SubmissionStore } from '../core/submissions.js';
+import type { SubmissionStore, SubmissionsPayload } from '../core/submissions.js';
 import { createRateLimiter, type RateLimiter } from '../core/rate-limit.js';
 import { verifyToken } from '../core/tokens.js';
 import type { WsHub } from '../ws/types.js';
-import type { RoundOrchestrator } from '../core/round-orchestrator.js';
+import type { OrchestratorPayload, RoundOrchestrator } from '../core/round-orchestrator.js';
 
 /** Durable checkpoint shape: FSM state + roster linkage. Opaque to RoomStore. */
 interface Checkpoint {
@@ -30,6 +30,9 @@ interface Checkpoint {
   fsmState: string;
   roundIdx: number;
   phaseEndsAt: number | null;
+  room: SerializedRoom | null;
+  submissions: SubmissionsPayload;
+  orchestrator?: OrchestratorPayload;
 }
 
 export interface GameRuntimesOptions {
@@ -98,6 +101,11 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
       fsmState: fsm.state,
       roundIdx: fsm.roundIdx,
       phaseEndsAt: fsm.phaseEndsAt,
+      room: roomManager.serialize(code),
+      submissions: opts.submissions.serialize(code),
+      ...(opts.orchestrator !== undefined
+        ? { orchestrator: opts.orchestrator.serialize(code) }
+        : {}),
     };
     try {
       store.put(code, cp);
@@ -138,6 +146,9 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
       code,
       ...(initial !== undefined ? { initial } : {}),
       roundIdx: typeof cp?.roundIdx === 'number' ? cp.roundIdx : 0,
+      ...(typeof cp?.phaseEndsAt === 'number' || cp?.phaseEndsAt === null
+        ? { phaseEndsAt: cp.phaseEndsAt }
+        : {}),
       onChange: (change) => {
         armForPhase(code, change.phaseEndsAt);
         persist(code, fsm);
@@ -145,6 +156,8 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
       },
     });
     const timers = new TimerService();
+    opts.submissions.hydrate(cp?.submissions);
+    opts.orchestrator?.hydrate(code, cp?.orchestrator);
     runtimes.set(code, { fsm, timers });
     opts.orchestrator?.register(code, fsm);
 
@@ -237,6 +250,29 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
   }
 
   return async (app: FastifyInstance): Promise<void> => {
+    roomManager.canJoin = (code) => {
+      const rt = getRuntime(code);
+      if (rt === null || rt.fsm.state === 'LOBBY') return true;
+      return (
+        rt.fsm.state === 'SONG_SELECTION' &&
+        rt.fsm.phaseEndsAt !== null &&
+        rt.fsm.phaseEndsAt - Date.now() > 45_000
+      );
+    };
+    roomManager.onChanged = (code) => {
+      const rt = getRuntime(code);
+      if (rt !== null) persist(code, rt.fsm);
+    };
+    opts.submissions.onChanged = (code) => {
+      const rt = getRuntime(code);
+      if (rt !== null) persist(code, rt.fsm);
+    };
+    if (opts.orchestrator !== undefined) {
+      opts.orchestrator.onChanged = (code) => {
+        const rt = getRuntime(code);
+        if (rt !== null) persist(code, rt.fsm);
+      };
+    }
     /**
      * Host controls (TDD §5): every mutation dispatches through the per-room
      * mutex; role derived ONLY from the Bearer token server-side.
@@ -261,6 +297,18 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
         let result: Awaited<ReturnType<typeof dispatchAsHost>>;
         switch (action) {
           case 'start_game':
+            if (
+              [...(roomManager.get(req.params.code)?.players.values() ?? [])].filter(
+                (player) => player.connected,
+              ).length < 2
+            ) {
+              result = {
+                ok: false,
+                status: 409,
+                body: apiError('INVALID_ACTION', 'at least two connected players are required'),
+              };
+              break;
+            }
             result = await dispatchAsHost(req.params.code, 'START_GAME');
             break;
           case 'skip_phase':
@@ -273,6 +321,19 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
             // Manual-mode round end (D-E): the host taps Done after the last card.
             result = await dispatchAsHost(req.params.code, 'QUEUE_DONE');
             break;
+          case 'manual_next': {
+            const advanced = await opts.orchestrator?.manualNext(req.params.code);
+            if (advanced === undefined || advanced === 'invalid') {
+              result = {
+                ok: false,
+                status: 409,
+                body: apiError('INVALID_ACTION', 'manual playback is not active'),
+              };
+            } else {
+              result = { ok: true };
+            }
+            break;
+          }
           case 'advance_reveal':
             result = await dispatchAsHost(req.params.code, 'ADVANCE_REVEAL', {
               final: req.body?.final === true,
@@ -299,7 +360,19 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
         if (!result.ok) {
           return reply.code(result.status).send(result.body);
         }
-        analytics.emit({ type: 'round_completed', roomId: req.params.code, durationMs: 0 });
+        if (action === 'advance_reveal' && req.body?.final === true) {
+          analytics.emit({ type: 'round_completed', roomId: req.params.code, durationMs: 0 });
+        }
+        if (action === 'finish_game') {
+          const room = roomManager.get(req.params.code);
+          const rt = getRuntime(req.params.code);
+          analytics.emit({
+            type: 'game_completed',
+            roomId: req.params.code,
+            rounds: (rt?.fsm.roundIdx ?? 0) + 1,
+            players: room?.players.size ?? 0,
+          });
+        }
         return reply.send({ ok: true as const, data: { done: true } });
       },
     );

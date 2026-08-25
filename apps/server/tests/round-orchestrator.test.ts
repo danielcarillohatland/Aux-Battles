@@ -3,7 +3,7 @@
  *  - FSM-backed snapshot building (state/roundIdx/phaseEndsAt/submissions/you).
  *  - L0/L4 playback-mode selection per D-E: api ONLY with a live session AND a
  *    device; ONE startPlayback with the full shuffled queue; manual otherwise.
- *  - QUEUE_DONE detection in api mode → AI_JUDGING → placeholder judge fires
+ *  - QUEUE_DONE detection in api mode → AI_JUDGING → fallback-safe judge fires
  *    JUDGEMENT_STORED so RESULTS is reached end-to-end.
  *  - Kick route: host-only, closes the socket via wsHub.kick + roster removal.
  */
@@ -143,7 +143,7 @@ function lockedRoom(opts: {
   if (opts.rows !== undefined) {
     orch.setSubmissions(fakeSubmissions(opts.rows(code)));
   }
-  // Short AI_JUDGING so the placeholder judge path completes inside the test.
+  // Short AI_JUDGING so the fallback deadline completes inside the test.
   const fsm = new RoomFsm({
     code,
     durations: { AI_JUDGING: 40 },
@@ -252,9 +252,9 @@ describe('playback mode selection (D-E)', () => {
   });
 });
 
-// ── Queue done → placeholder judge → RESULTS ─────────────────────────────────
+// ── Queue done → judge → RESULTS ─────────────────────────────────────────────
 
-describe('QUEUE_DONE → AI_JUDGING → placeholder JUDGEMENT_STORED', () => {
+describe('QUEUE_DONE → AI_JUDGING → JUDGEMENT_STORED', () => {
   it('poll detects playback past the last queue track and reaches RESULTS', async () => {
     const provider = new StubProvider();
     const { orch, code, fsm } = lockedRoom({

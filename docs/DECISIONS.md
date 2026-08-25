@@ -133,3 +133,10 @@ These were adjudicated during design review (`docs/review-report.md`, rulings A�
 - **Reason:** Independent review correctly ruled the Phase 2 deliverable "a parts kit, not a running machine" — TDD §13 Phase 2 scope requires full FSM + timers + host controls + reconnect/reclaim as a live system.
 - **Alternatives:** Defer wiring to Phase 3 round flow (rejected: reviewer hold on COMPLETE designation is correct — unwired state cannot satisfy the phase gate).
 - **Consequences:** Live wire-verified: create → start_game → pick_category → SCENARIO with armed 8s deadline → autonomous TIMER_EXPIRED advance to SONG_SELECTION. Known follow-up AUX-006: WS default snapshot still hardcodes LOBBY until the FSM-backed builder replaces it. Kick command deferred to Phase 3 roster work.
+
+### D-018 ✅ Phase 3–4 completion: durable orchestration + fallback-safe judge
+- **Date:** 2026-08-25
+- **Decision:** The checkpoint document now owns roster/token hashes, exact phase deadlines, submissions, playback/reveal cursor, results, and cumulative leaderboard. The host is a controller, not a song-submission quorum member. Judging is one provider-neutral batched call with strict coverage/permutation validation, bounded retries and deterministic hash fallback; OpenRouter is selected only by environment configuration.
+- **Reason:** End-to-end audit found that the previous Phase 3 implementation could not authenticate browser search, could not complete manual playback, lost roster/submissions on restart, and used a timer-only placeholder judge.
+- **Alternatives:** Keep post-round state ephemeral (rejected: restart mid-reveal would corrupt the party); require an LLM key (rejected: external outages may never stall a room).
+- **Consequences:** Manual and API modes reach RESULTS; worst-to-best reveals update a persisted leaderboard; missing Spotify/LLM credentials degrade cleanly. Full-game and SIGKILL-style restart integration tests pin the behavior.

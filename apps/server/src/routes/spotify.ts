@@ -25,15 +25,17 @@ export interface SpotifyRouteOptions {
   oauth: SpotifyOAuth;
   states: PkceStateStore;
   tokens: SpotifyTokenStore;
+  devMode?: boolean;
+  secureCookies?: boolean;
 }
 
 const CONNECTED_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>AUX BATTLES</title></head><body style="font-family:system-ui;display:grid;place-items:center;min-height:90vh"><main><h1>connected ✓</h1><p>You can close this tab and return to AUX BATTLES.</p></main></body></html>`;
 
-function sessionCookie(sessionToken: string): string {
+function sessionCookie(sessionToken: string, secure: boolean): string {
   // Host-session lifetime ≈ token store lifetime; HttpOnly + SameSite=Lax is
   // enough for a same-site callback flow (no third-party context).
   const maxAge = 60 * 60 * 24 * 14;
-  return `${HOST_SESSION_COOKIE}=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
+  return `${HOST_SESSION_COOKIE}=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
 }
 
 export function readHostSession(req: FastifyRequest): string | null {
@@ -96,7 +98,7 @@ export function spotifyRoute(opts: SpotifyRouteOptions): FastifyPluginAsync {
           spotifyUserId: user.id,
         });
 
-        void reply.header('set-cookie', sessionCookie(sessionToken));
+        void reply.header('set-cookie', sessionCookie(sessionToken, opts.secureCookies === true));
         void reply.type('text/html; charset=utf-8').code(200).send(CONNECTED_HTML);
       },
     );
@@ -104,18 +106,21 @@ export function spotifyRoute(opts: SpotifyRouteOptions): FastifyPluginAsync {
     // DEV-ONLY (D-011 doctrine): hands the caller's own access token back to
     // them, gated on a valid session cookie. Lets spike probes exercise the
     // real token path without printing or persisting secrets anywhere.
-    app.get('/spotify/debug-token', async (req: FastifyRequest, reply: FastifyReply) => {
-      const session = readHostSession(req);
-      if (session === null) {
-        return reply.code(401).send(apiError('NOT_AUTHENTICATED', 'host session cookie required'));
-      }
-      const tokens = await opts.tokens.load(session);
-      if (tokens === null) {
-        return reply
-          .code(404)
-          .send(apiError('ROOM_NOT_FOUND', 'no spotify session — visit /spotify/login'));
-      }
-      return reply.send({ ok: true as const, data: { accessToken: tokens.accessToken } });
-    });
+    if (opts.devMode === true)
+      app.get('/spotify/debug-token', async (req: FastifyRequest, reply: FastifyReply) => {
+        const session = readHostSession(req);
+        if (session === null) {
+          return reply
+            .code(401)
+            .send(apiError('NOT_AUTHENTICATED', 'host session cookie required'));
+        }
+        const tokens = await opts.tokens.load(session);
+        if (tokens === null) {
+          return reply
+            .code(404)
+            .send(apiError('ROOM_NOT_FOUND', 'no spotify session — visit /spotify/login'));
+        }
+        return reply.send({ ok: true as const, data: { accessToken: tokens.accessToken } });
+      });
   };
 }

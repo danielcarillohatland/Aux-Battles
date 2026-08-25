@@ -84,6 +84,36 @@ export const SnapshotSchema = z.object({
   playbackMode: z.enum(PLAYBACK_MODES),
   players: z.array(PublicPlayerSchema),
   submissionsCount: z.number().int().nonnegative(),
+  /** Current round content. Optional while older checkpoints are rehydrated. */
+  category: z.string().max(80).nullable().optional(),
+  scenario: z.string().max(240).nullable().optional(),
+  /** Anonymous playback order; ownership is revealed only in `results`. */
+  queue: z.array(TrackSchema).optional(),
+  playbackIndex: z.number().int().nonnegative().optional(),
+  results: z
+    .array(
+      z.object({
+        rank: z.number().int().positive(),
+        score: z.number().int().min(0).max(100),
+        explanation: z.string().max(280),
+        track: TrackSchema,
+        owner: NicknameSchema,
+        chicken: z.boolean(),
+      }),
+    )
+    .optional(),
+  resultCount: z.number().int().nonnegative().optional(),
+  revealIndex: z.number().int().nonnegative().optional(),
+  leaderboard: z
+    .array(
+      z.object({
+        playerId: z.string(),
+        nickname: NicknameSchema,
+        totalScore: z.number().int(),
+        wins: z.number().int().nonnegative(),
+      }),
+    )
+    .optional(),
   you: z.object({
     role: z.enum(['host', 'player']),
     hasSubmitted: z.boolean(),

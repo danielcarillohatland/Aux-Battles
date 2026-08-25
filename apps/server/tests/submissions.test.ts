@@ -227,7 +227,7 @@ describe('rounds route', () => {
       track: TRACK_B,
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ ok: true, data: { count: 3 } });
+    expect(res.json()).toMatchObject({ ok: true, data: { count: 2 } });
     expect(ctx.dispatched).toEqual([ctx.code]);
     await app.close();
   });
@@ -265,7 +265,7 @@ describe('rounds route', () => {
       track: TRACK_B,
     });
     expect(replay.statusCode).toBe(200);
-    expect(replay.json()).toMatchObject({ ok: true, data: { replayed: true } });
+    expect(replay.json()).toMatchObject({ ok: true, data: { replayed: false } });
     await app.close();
   });
 
@@ -307,8 +307,8 @@ describe('rounds route', () => {
       roomManager: ctx.roomManager,
       submissions: ctx.submissions,
     });
-    expect(summary.filledCount).toBe(2); // p2 AND the connected, silent host get 🐔
-    expect(summary.totalSubmissions).toBe(3);
+    expect(summary.filledCount).toBe(1); // p2 only; the host is not a contestant
+    expect(summary.totalSubmissions).toBe(2);
     const subs = ctx.submissions.list(`${ctx.code}:0`);
     expect(subs.filter((s) => s.chicken).length).toBe(summary.filledCount);
   });

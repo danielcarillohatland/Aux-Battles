@@ -84,7 +84,7 @@ export function SongSelection(props: {
 
   const runSearch = async (q: string): Promise<void> => {
     const seq = ++requestSeq;
-    const outcome: SearchOutcome = await searchTracks(q);
+    const outcome: SearchOutcome = await searchTracks(q, props.session.playerToken);
     if (seq !== requestSeq || query().trim() !== q) return; // superseded
     switch (outcome.status) {
       case 'ok':

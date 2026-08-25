@@ -14,7 +14,6 @@ import type { Snapshot } from '@aux/shared';
 import { apiRequest, HostApiError } from './api.js';
 import { errorText } from './errors.js';
 import { createHostRealtime } from './ws.js';
-import type { Track } from '@aux/shared';
 import { RoundFlow } from './round/RoundFlow.js';
 
 interface HostLobbyProps {
@@ -68,13 +67,22 @@ export const HostLobby = (props: HostLobbyProps) => {
 
   const degraded = () => connState() === 'reconnecting' || connState() === 'polling';
 
-  // D-E manual mode: the round queue mirror + host-driven index. The card is
-  // presentational; advancing flows back up through `advanceManual` until the
-  // Phase-2.5/3 playback state endpoints give us the authoritative wire copy.
-  const [manualQueue] = createSignal<Track[]>([]);
-  const [manualIndex, setManualIndex] = createSignal(0);
-  const advanceManual = () =>
-    setManualIndex((i) => Math.min(i + 1, Math.max(manualQueue().length - 1, 0)));
+  const advanceManual = async () => {
+    if (actionBusy()) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      await apiRequest(hostActionUrl(props.room.code, 'manual_next'), {
+        method: 'POST',
+        headers: { authorization: `Bearer ${props.room.hostToken}` },
+        body: JSON.stringify({}),
+      });
+    } catch (err) {
+      setActionError(err instanceof HostApiError ? errorText(err.code) : 'Something went wrong.');
+    } finally {
+      setActionBusy(false);
+    }
+  };
 
   /** FSM states owned by the round-flow screens (everything else stays lobby). */
   const ROUND_STATES: ReadonlySet<Snapshot['state']> = new Set([
@@ -83,6 +91,10 @@ export const HostLobby = (props: HostLobbyProps) => {
     'SONG_SELECTION',
     'LOCKED',
     'PLAYBACK',
+    'AI_JUDGING',
+    'RESULTS',
+    'LEADERBOARD',
+    'GAME_OVER',
   ]);
   const inRoundFlow = () => ROUND_STATES.has(state());
 
@@ -136,6 +148,23 @@ export const HostLobby = (props: HostLobbyProps) => {
         method: 'POST',
         headers: { authorization: `Bearer ${props.room.hostToken}` },
         body: JSON.stringify({}),
+      });
+    } catch (err) {
+      setActionError(err instanceof HostApiError ? errorText(err.code) : 'Something went wrong.');
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const postHostAction = async (action: string, body: Record<string, unknown> = {}) => {
+    if (actionBusy()) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      await apiRequest(hostActionUrl(props.room.code, action), {
+        method: 'POST',
+        headers: { authorization: `Bearer ${props.room.hostToken}` },
+        body: JSON.stringify(body),
       });
     } catch (err) {
       setActionError(err instanceof HostApiError ? errorText(err.code) : 'Something went wrong.');
@@ -240,13 +269,16 @@ export const HostLobby = (props: HostLobbyProps) => {
               <RoundFlow
                 snapshot={snap()}
                 countdownSeconds={countdown()}
-                scenario={scenario()}
+                scenario={snap().scenario ?? scenario()}
                 busy={actionBusy()}
-                queue={manualQueue()}
-                playbackIndex={manualIndex()}
+                queue={snap().queue ?? []}
+                playbackIndex={snap().playbackIndex ?? 0}
                 onPickCategory={(c) => void pickCategory(c)}
                 onBeginPlayback={() => void beginPlayback()}
-                onManualAdvance={advanceManual}
+                onManualAdvance={() => void advanceManual()}
+                onAdvanceReveal={(final) => void postHostAction('advance_reveal', { final })}
+                onNextRound={() => void postHostAction('next_round')}
+                onFinish={() => void postHostAction('finish_game')}
               />
             )}
           </Show>

@@ -505,7 +505,7 @@ describe('submission races', () => {
       submit(code, p.playerToken, { clientMsgId: 'cm-tap-b-0001', track: makeTrack('Tap B') }),
     ]);
 
-    const statuses = [a.statusCode, b.statusCode].sort();
+    const statuses = [a.statusCode, b.statusCode].sort((left, right) => right - left);
     expect(statuses[0]).toBe(409);
     expect([200, 201]).toContain(statuses[1]);
     const loser = a.statusCode === 409 ? a : b;
@@ -525,11 +525,11 @@ describe('submission races', () => {
     };
     expect(await gameState()).toBe('SONG_SELECTION');
 
-    // Every roster member submits (host included — the roster IS the quorum).
+    // Every phone participant submits; the host controls the round but does
+    // not count toward the song-selection quorum.
     // The LAST submission must flip the FSM via ALL_SUBMITTED without waiting
     // anywhere near the 90 s SONG_SELECTION deadline.
     const identities = [
-      { token: hostToken, label: 'host' },
       { token: q1.playerToken, label: 'quorum-one' },
       { token: q2.playerToken, label: 'quorum-two' },
     ];

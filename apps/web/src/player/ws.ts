@@ -164,7 +164,7 @@ export function createPlayerRealtime(opts: RealtimeOptions): RealtimeHandle {
         return;
       case 'judgement':
       case 'reveal_owner':
-        return; // Phase 4 payloads land later
+        return; // authoritative reveal data arrives in the following snapshot
       case 'playback_cue':
         return; // host-only; never expected on a player socket
       case 'room_closed':

@@ -175,7 +175,7 @@ export function createHostRealtime(opts: RealtimeOptions): RealtimeHandle {
       case 'playback_cue':
       case 'judgement':
       case 'reveal_owner':
-        return; // Phase 2.5 / Phase 4 payloads land later
+        return; // authoritative playback/reveal state arrives in snapshots
       case 'room_closed':
       case 'kicked':
         terminate(frame.t, frame.reason);

@@ -37,31 +37,31 @@
 - [x] Integration hard-case suite (simultaneous submits, refresh mid-round, expiry w/ live sockets…)
 - [ ] **PLAYTEST.md loop becomes active**
 
-## Phase 2.5 — Spotify SPIKE *(code+probes complete; live device demo pending owner login)*
-- [x] Day-one probes: preview_url DEAD (0/10), search limit>10 hard-rejected (400), rate ceiling >20-burst · transfer/device probes need host OAuth token → live demo pending
+## Phase 2.5 — Spotify SPIKE *(complete — live Premium/device probes pass)*
+- [x] Day-one probes: preview_url DEAD (0/10), search limit>10 hard-rejected (400), rate ceiling >20-burst; live transfer/device probes P6–P8 pass
 - [x] Preload-and-verify playback orchestrator behind `MusicProvider`
 - [x] OAuth PKCE server-side flow + encrypted token store
 - [x] Search proxy (`POST /search`)
-- [ ] L0 (API autoplay) AND L4 (manual) demo-able *(L4 UI built; both demos need one owner browser login)*
-- [ ] **If major limitation found: STOP implementation, present findings to owner**
+- [x] L0 (API autoplay) AND L4 (manual) demo-able *(P6–P8 live probes pass; L4 is first-class)*
+- [x] **If major limitation found: STOP implementation, present findings to owner** *(none found)*
 
-## Phase 3 — Submissions & round flow
-- [ ] `POST /rounds/:id/submissions` w/ idempotency (`client_msg_id`)
-- [ ] Server-side shuffle (anonymity) + `submission_received` count-only broadcasts
-- [ ] Song search UI (pinned search, sticky pick bar, SURE? confirm, sealed state)
-- [ ] LOCKED staging state; quorum early-fire; timer expiry → CHICKEN 🐔 random assignment
-- [ ] Concurrency tests green
+## Phase 3 — Submissions & round flow *(complete)*
+- [x] `POST /rounds/:id/submissions` w/ idempotency (`client_msg_id`)
+- [x] Server-side shuffle (anonymity) + `submission_received` count-only broadcasts
+- [x] Song search UI (pinned search, sticky pick bar, SURE? confirm, sealed state)
+- [x] LOCKED staging state; quorum early-fire; timer expiry → CHICKEN 🐔 random assignment
+- [x] Concurrency tests green
 
-## Phase 4 — AI Judge & reveal
-- [ ] `LLMProvider` interface + OpenRouter impl (config-switchable)
-- [ ] Batched judging: prompt build, strict schema parse, permutation validation, retries, fallback judge
-- [ ] Results persistence + leaderboard math
-- [ ] Reveal choreography (beat-timed worst→best, owner reveal, reduced-motion fallback)
-- [ ] Winner screen + next-round loop
+## Phase 4 — AI Judge & reveal *(complete — timing polish remains a playtest gate)*
+- [x] `LLMProvider` interface + OpenRouter impl (config-switchable)
+- [x] Batched judging: prompt build, strict schema parse, permutation validation, retries, fallback judge
+- [x] Results persistence + leaderboard math
+- [x] Reveal choreography (host-paced worst→best, owner reveal, reduced-motion fallback)
+- [x] Winner screen + next-round loop
 
 ## Phase 5 — Polish & deploy
-- [ ] k6 load gate: 50 rooms × 8 players thresholds green (500×8 headroom variant)
-- [ ] Fly.io deploy (single app + SQLite volume, WSS)
+- [ ] k6 load gate: 50 rooms × 8 players thresholds green (script ready; requires k6 runtime)
+- [ ] Fly.io deploy (image/config/volume wiring ready; requires owner Fly app + secrets)
 - [ ] Structured playtest #1 executed, findings logged in PLAYTEST.md
 - [ ] Reveal timing polish from playtest data
 - [ ] Definition-of-success checklist walked end-to-end on real devices

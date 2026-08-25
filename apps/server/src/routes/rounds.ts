@@ -22,7 +22,7 @@ import { RoomCodeSchema, SubmissionRequestSchema, apiError } from '@aux/shared';
 import type { FsmState } from '@aux/shared';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { RoomManager } from '../core/room-manager.js';
-import { AlreadySubmittedError, SubmissionStore } from '../core/submissions.js';
+import { AlreadySubmittedError, SubmissionStore, roundKeyOf } from '../core/submissions.js';
 import { createRateLimiter } from '../core/rate-limit.js';
 import { verifyToken } from '../core/tokens.js';
 
@@ -96,6 +96,26 @@ export function roundsRoute(opts: RoundsRouteOptions): FastifyPluginAsync {
     if (!parsed.success) {
       return reply.code(400).send(apiError('INVALID_ACTION', 'clientMsgId and track required'));
     }
+    if (auth.isHost) {
+      return reply.code(409).send(apiError('INVALID_ACTION', 'the host does not submit a song'));
+    }
+
+    // Idempotent retries stay valid after quorum closes the phase. Bind the
+    // lookup to the authenticated player so message ids cannot leak results.
+    const replay = submissions.replay(
+      roundKeyOf(code, roundIdx),
+      auth.playerId,
+      parsed.data.clientMsgId,
+    );
+    if (replay !== null) {
+      return reply.send({
+        ok: true as const,
+        data: { count: replay.count, replayed: false, hasSubmitted: true },
+      });
+    }
+    if (submissions.hasSubmitted(roundKeyOf(code, roundIdx), auth.playerId)) {
+      return reply.code(409).send(apiError('ALREADY_SUBMITTED', 'one song per player per round'));
+    }
 
     // State gate: submissions only during SONG_SELECTION of the LIVE round.
     const phase = opts.getRoomPhase(code);
@@ -131,7 +151,11 @@ export function roundsRoute(opts: RoundsRouteOptions): FastifyPluginAsync {
         // are non-fatal; LOCKED either way.
         const room = roomManager.get(code);
         const connected =
-          room === undefined ? 0 : [...room.players.values()].filter((p) => p.connected).length;
+          room === undefined
+            ? 0
+            : [...room.players.entries()].filter(
+                ([id, player]) => id !== room.hostPlayerId && player.connected,
+              ).length;
         if (opts.dispatchAllSubmitted !== undefined && result.count >= connected && connected > 0) {
           await opts.dispatchAllSubmitted(code);
         }
@@ -141,7 +165,9 @@ export function roundsRoute(opts: RoundsRouteOptions): FastifyPluginAsync {
         ok: true as const,
         data: {
           count: result.count,
-          replayed: result.status === 'replayed',
+          // Idempotency returns the original wire result byte-for-byte. Keep
+          // replay detection internal so a retry cannot change its own body.
+          replayed: false,
           hasSubmitted: true,
         },
       });
@@ -218,7 +244,7 @@ export function submitRandomForMissing(
   if (room === undefined)
     return { filledCount: 0, totalSubmissions: deps.submissions.count(roundId) };
   const connected = [...room.players.keys()].filter(
-    (id) => room.players.get(id)?.connected === true,
+    (id) => id !== room.hostPlayerId && room.players.get(id)?.connected === true,
   );
   const filled = deps.submissions.fillChickens(code, target.roundIdx, connected);
   return { filledCount: filled.length, totalSubmissions: deps.submissions.count(roundId) };

@@ -165,10 +165,11 @@ describe('GET /api/v1/rooms/:code/snapshot', () => {
     expect(snap.hostNickname).toBe(HOST_DEFAULT_NICKNAME);
     const players = snap.players as Array<{ nickname: string; connected: boolean }>;
     const nicks = players.map((p) => p.nickname);
-    expect(nicks).toContain(HOST_DEFAULT_NICKNAME);
+    expect(snap.hostNickname).toBe(HOST_DEFAULT_NICKNAME);
+    expect(nicks).not.toContain(HOST_DEFAULT_NICKNAME);
     expect(nicks).toContain('Sam');
     expect(nicks).toContain('Bob');
-    expect(players.length).toBe(3);
+    expect(players.length).toBe(2);
     for (const p of players) expect(p.connected).toBe(true);
   });
 

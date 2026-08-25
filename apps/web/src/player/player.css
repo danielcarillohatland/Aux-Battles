@@ -143,6 +143,33 @@
   }
 }
 
+.p-results-screen {
+  justify-content: start;
+}
+
+.p-personal-result {
+  text-align: center;
+}
+
+.p-leaderboard {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0;
+  list-style-position: inside;
+}
+
+.p-leaderboard li {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.75rem;
+  border-radius: 0.65rem;
+  background: rgb(255 255 255 / 7%);
+}
+
+.p-leaderboard li.me {
+  outline: 2px solid #ffda57;
+}
+
 .p-wait-copy {
   margin: 0.5rem 0 0;
   font-size: 1rem;

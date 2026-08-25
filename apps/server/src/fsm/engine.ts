@@ -29,6 +29,8 @@ export interface RoomFsmOptions {
   code: string;
   initial?: FsmState;
   roundIdx?: number;
+  /** Rehydrated absolute deadline; avoids extending a timed phase after restart. */
+  phaseEndsAt?: number | null;
   /** Host-adjustable duration overrides merged over DEFAULT_PHASE_DURATIONS. */
   durations?: Partial<Record<FsmState, number>>;
   /** Awaited side-effect hook, run inside the mutex after each hop. */
@@ -53,7 +55,8 @@ export class RoomFsm {
     this._roundIdx = opts.roundIdx ?? 0;
     this.durations = { ...DEFAULT_PHASE_DURATIONS, ...opts.durations };
     if (opts.onChange !== undefined) this.onChange = opts.onChange;
-    this._phaseEndsAt = this.deadlineFor(this._state);
+    this._phaseEndsAt =
+      opts.phaseEndsAt !== undefined ? opts.phaseEndsAt : this.deadlineFor(this._state);
   }
 
   get state(): FsmState {

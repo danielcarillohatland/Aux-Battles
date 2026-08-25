@@ -154,11 +154,14 @@ function coerceTrack(raw: unknown): Track | null {
  * server side). While it 404s we report `unavailable` so the UI can show its
  * graceful disabled state instead of an error.
  */
-export async function searchTracks(query: string): Promise<SearchOutcome> {
+export async function searchTracks(query: string, playerToken?: string): Promise<SearchOutcome> {
   let res: Response;
   try {
     res = await fetch(`/api/v1/search?q=${encodeURIComponent(query)}&limit=10`, {
-      headers: { accept: 'application/json' },
+      headers: {
+        accept: 'application/json',
+        ...(playerToken !== undefined ? { authorization: `Bearer ${playerToken}` } : {}),
+      },
     });
   } catch {
     return { status: 'error', message: "couldn't reach search — check your wifi" };

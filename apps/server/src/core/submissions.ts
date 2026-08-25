@@ -196,6 +196,12 @@ export class SubmissionStore {
     return this.byPlayer.get(roundId)?.has(playerId) ?? false;
   }
 
+  replay(roundId: string, playerId: string, clientMsgId: string): SubmitResult | null {
+    const submission = this.byMsg.get(roundId)?.get(clientMsgId);
+    if (submission === undefined || submission.playerId !== playerId) return null;
+    return { status: 'replayed', submission, count: this.count(roundId) };
+  }
+
   /** Arrival-ordered copies for playback/judging consumers. Internal ids included — NOT wire-safe. */
   list(roundId: string): StoredSubmission[] {
     const m = this.byPlayer.get(roundId);

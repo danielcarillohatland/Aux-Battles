@@ -18,6 +18,7 @@ import { ScenarioDisplay } from './ScenarioDisplay.js';
 import { SelectionProgress } from './SelectionProgress.js';
 import { LockedStaging } from './LockedStaging.js';
 import { PlaybackView } from './PlaybackView.js';
+import { GameOverView, JudgingView, LeaderboardView, ResultsReveal } from './PostRound.js';
 
 export interface RoundFlowProps {
   snapshot: Snapshot;
@@ -31,6 +32,9 @@ export interface RoundFlowProps {
   onPickCategory: (category: string) => void;
   onBeginPlayback: () => void;
   onManualAdvance: () => void;
+  onAdvanceReveal: (final: boolean) => void;
+  onNextRound: () => void;
+  onFinish: () => void;
 }
 
 export const RoundFlow = (props: RoundFlowProps) => (
@@ -62,6 +66,27 @@ export const RoundFlow = (props: RoundFlowProps) => (
         currentIndex={props.playbackIndex}
         onManualAdvance={props.onManualAdvance}
       />
+    </Match>
+    <Match when={props.snapshot.state === 'AI_JUDGING'}>
+      <JudgingView />
+    </Match>
+    <Match when={props.snapshot.state === 'RESULTS'}>
+      <ResultsReveal
+        snapshot={props.snapshot}
+        busy={props.busy}
+        onAdvance={props.onAdvanceReveal}
+      />
+    </Match>
+    <Match when={props.snapshot.state === 'LEADERBOARD'}>
+      <LeaderboardView
+        snapshot={props.snapshot}
+        busy={props.busy}
+        onNextRound={props.onNextRound}
+        onFinish={props.onFinish}
+      />
+    </Match>
+    <Match when={props.snapshot.state === 'GAME_OVER'}>
+      <GameOverView snapshot={props.snapshot} />
     </Match>
   </Switch>
 );

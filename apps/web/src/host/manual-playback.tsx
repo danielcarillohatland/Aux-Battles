@@ -30,8 +30,7 @@ export const ManualPlayback = (props: ManualPlaybackProps) => {
 
   const currentTrack = (): Track | undefined => props.queue[clampedIndex()];
 
-  /** Last card already up — Next has nowhere to go within this round. */
-  const atEnd = () => total() === 0 || props.currentIndex >= total() - 1;
+  const atEnd = () => total() > 0 && props.currentIndex >= total() - 1;
 
   // Keep the active card centered in the swipe strip. Instant scroll —
   // animations may never delay gameplay (owner condition #10).
@@ -95,10 +94,10 @@ export const ManualPlayback = (props: ManualPlaybackProps) => {
         <button
           type="button"
           class="btn-primary btn-manual-next"
-          disabled={atEnd()}
+          disabled={total() === 0}
           onClick={() => props.onAdvance()}
         >
-          {atEnd() ? 'Round done ✓' : 'Next ▶'}
+          {atEnd() ? 'Judge these songs ▶' : 'Next ▶'}
         </button>
       </Show>
     </section>
