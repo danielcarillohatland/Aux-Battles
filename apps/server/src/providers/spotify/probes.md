@@ -36,3 +36,18 @@ npx tsx scripts/spotify-probe.ts   # prints human-readable log + JSON blob
 ```
 
 Requires `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` in `.env`.
+
+## LIVE DEVICE PROBES (post-OAuth, real Premium session) — ALL PASS ✅
+
+| Probe                                                         | Result | Detail                                      |
+| ------------------------------------------------------------- | ------ | ------------------------------------------- |
+| P6a Session→token resolution (encrypted store + refresh path) | PASS   | 14ms                                        |
+| P6 Device list w/ user token                                  | PASS   | 2 devices: Web Player (Safari), MacBook Air |
+| P7 Transfer-playback latency                                  | PASS   | 510ms to Web Player                         |
+| P8 Playback state polling                                     | PASS   | correct 204 no-session handling             |
+
+**Spike verdict: NO Dev Mode limitation blocks the TDD design.**
+
+- L0 API autoplay: VIABLE (transfer 510ms; verify-don't-drive polling works)
+- L4 manual mode: REQUIRED for previews (dead) but fully supported
+- Search clamp ≤10 enforced client-side; rate ceiling non-issue at party scale

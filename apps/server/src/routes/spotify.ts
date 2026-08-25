@@ -100,5 +100,22 @@ export function spotifyRoute(opts: SpotifyRouteOptions): FastifyPluginAsync {
         void reply.type('text/html; charset=utf-8').code(200).send(CONNECTED_HTML);
       },
     );
+
+    // DEV-ONLY (D-011 doctrine): hands the caller's own access token back to
+    // them, gated on a valid session cookie. Lets spike probes exercise the
+    // real token path without printing or persisting secrets anywhere.
+    app.get('/spotify/debug-token', async (req: FastifyRequest, reply: FastifyReply) => {
+      const session = readHostSession(req);
+      if (session === null) {
+        return reply.code(401).send(apiError('NOT_AUTHENTICATED', 'host session cookie required'));
+      }
+      const tokens = await opts.tokens.load(session);
+      if (tokens === null) {
+        return reply
+          .code(404)
+          .send(apiError('ROOM_NOT_FOUND', 'no spotify session — visit /spotify/login'));
+      }
+      return reply.send({ ok: true as const, data: { accessToken: tokens.accessToken } });
+    });
   };
 }

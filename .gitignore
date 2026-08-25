@@ -9,3 +9,4 @@ package-lock.json
 *.sqlite-shm
 .DS_Store
 *.tsbuildinfo
+var/
