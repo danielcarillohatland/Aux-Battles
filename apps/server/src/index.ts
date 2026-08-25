@@ -12,6 +12,7 @@ import { RoomManager } from './core/room-manager.js';
 import { healthRoute } from './routes/health.js';
 import { devRoute, type DebugState } from './routes/dev.js';
 import { roomsRoute } from './routes/rooms.js';
+import { initWsHub } from './ws/index.js';
 
 export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
   const cfg = loadConfig(env);
@@ -43,7 +44,10 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
   const roomManager = new RoomManager();
   await log.register(roomsRoute({ roomManager, analytics }), { prefix: '/api/v1' });
 
-  return { app: log, cfg, analytics, roomManager };
+  // Phase-2 realtime: read-mostly WS hub (D-D) — tickets, seq frames, heartbeat.
+  const wsHub = await initWsHub(log, { roomManager });
+
+  return { app: log, cfg, analytics, roomManager, wsHub };
 }
 
 const isMain =
