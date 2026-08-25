@@ -1,0 +1,33 @@
+app = "aux-battles"
+primary_region = "osl"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8787"
+  HOST = "0.0.0.0"
+  NODE_ENV = "production"
+  AUX_DB_FILE = "/data/aux.sqlite"
+  AUX_ANALYTICS_FILE = "/data/analytics.ndjson"
+  AUX_TRUST_PROXY = "1"
+  AUX_DEV_MODE = "0"
+
+[[mounts]]
+  source = "aux_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "15s"
+    method = "GET"
+    timeout = "3s"
+    path = "/healthz"

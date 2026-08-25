@@ -1,7 +1,7 @@
 node_modules/
 dist/
+dist-app/
 coverage/
-package-lock.json
 *.log
 .env
 *.sqlite
