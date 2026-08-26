@@ -529,6 +529,132 @@
   animation: crown-drop 500ms cubic-bezier(0.2, 0.9, 0.2, 1.25);
 }
 
+/* ── GAME_OVER winner screen (frontend-spec §2.11) ────────────────────── */
+
+.winner-champ {
+  margin: 0;
+  font-size: clamp(2.2rem, 7vw, 5rem);
+  font-weight: 900;
+  line-height: 1.05;
+  background: linear-gradient(100deg, #ffda57, #ff2fb4);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  overflow-wrap: anywhere;
+}
+
+/* Rotating champion adjective (§2.11) — swap is instant, no crossfade delay. */
+.winner-adjective {
+  margin: 0;
+  font-size: clamp(1rem, 2.6vw, 1.6rem);
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: #ffda57;
+}
+
+.podium {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: clamp(0.6rem, 2vw, 1.25rem);
+}
+.podium-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: clamp(92px, 15vw, 180px);
+}
+.podium-nick {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 900;
+  font-size: clamp(0.95rem, 2vw, 1.4rem);
+}
+.podium-score {
+  font-size: clamp(0.85rem, 1.8vw, 1.15rem);
+  color: #c9c9dd;
+  font-variant-numeric: tabular-nums;
+}
+.podium-block {
+  width: 100%;
+  border-radius: 14px 14px 4px 4px;
+  display: grid;
+  place-items: center;
+  font-size: clamp(1.4rem, 3.5vw, 2.4rem);
+  transform-origin: bottom;
+  animation: podium-rise 420ms cubic-bezier(0.2, 0.9, 0.2, 1.2) backwards;
+}
+.podium-col[data-place='1'] .podium-block {
+  height: clamp(110px, 22vh, 210px);
+  background: linear-gradient(180deg, rgb(255 218 87 / 34%), rgb(255 218 87 / 10%));
+  border: 1px solid #ffda57;
+  box-shadow: 0 0 3rem rgb(255 218 87 / 30%);
+  animation-delay: 480ms;
+}
+.podium-col[data-place='2'] .podium-block {
+  height: clamp(76px, 15vh, 150px);
+  background: linear-gradient(180deg, rgb(201 201 221 / 26%), rgb(201 201 221 / 8%));
+  border: 1px solid #a9a9c4;
+  animation-delay: 360ms;
+}
+.podium-col[data-place='3'] .podium-block {
+  height: clamp(58px, 11vh, 112px);
+  background: linear-gradient(180deg, rgb(255 122 69 / 26%), rgb(255 122 69 / 8%));
+  border: 1px solid #ff7a45;
+  animation-delay: 240ms;
+}
+@keyframes podium-rise {
+  from {
+    transform: scaleY(0);
+    opacity: 0.4;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+/* CSS-only confetti ×3 bursts over the winner card (same trick as Reveal,
+   fired as three waves ~700 ms apart — §2.11 "confetti cannon ×3"). */
+.winner-confetti {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  overflow: hidden;
+}
+.winner-confetti .winner-burst {
+  position: absolute;
+  inset: 0;
+}
+.winner-confetti span {
+  position: absolute;
+  top: -6vh;
+  left: var(--cx, 50vw);
+  width: 12px;
+  height: 20px;
+  border-radius: 3px;
+  background: var(--cc, #ffda57);
+  rotate: var(--cr, 0deg);
+  opacity: 0;
+  animation: winner-fall 1700ms calc(var(--cd, 0ms) + var(--cw, 0ms))
+    cubic-bezier(0.15, 0.4, 0.6, 1) forwards;
+}
+@keyframes winner-fall {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0.9;
+    transform: translateY(115vh);
+  }
+}
+
 @keyframes result-slam {
   from {
     opacity: 0;
@@ -553,7 +679,11 @@
 
 @media (prefers-reduced-motion: reduce) {
   .result-card,
-  .winner-crown {
+  .winner-crown,
+  .podium-block {
     animation: none;
+  }
+  .winner-confetti {
+    display: none;
   }
 }

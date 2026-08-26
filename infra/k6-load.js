@@ -51,7 +51,9 @@ export default function () {
       headers: { ...headers, authorization: `Bearer ${token}` },
     });
     if (!check(ticketed, { 'ws ticket minted': (r) => r.status === 200 })) continue;
-    const socket = new WebSocket(`${wsBase}/ws?room=${code}&ticket=${ticketed.json('data.ticket')}`);
+    const socket = new WebSocket(
+      `${wsBase}/ws?room=${code}&ticket=${ticketed.json('data.ticket')}`,
+    );
     socket.addEventListener('open', () => {
       open += 1;
     });
@@ -76,7 +78,12 @@ export default function () {
       `${base}/api/v1/rooms/${code}/rounds/0/submissions`,
       JSON.stringify({
         clientMsgId: `cm-${code}-${__VU}-${__ITER}-p${player}`,
-        track: { id: `tr-${player}`, title: `Track ${player}`, artist: 'k6 choir', durationMs: 180000 },
+        track: {
+          id: `tr-${player}`,
+          title: `Track ${player}`,
+          artist: 'k6 choir',
+          durationMs: 180000,
+        },
       }),
       { headers: { ...headers, authorization: `Bearer ${token}` } },
     );

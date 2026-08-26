@@ -292,7 +292,18 @@ const WaitingScreen = (props: { session: PlayerSession; onLost: () => void }) =>
               }
             >
               <Show when={rt?.snapshot()} keyed>
-                {(snap) => <PlayerPostRound snapshot={snap} nickname={props.session.nickname} />}
+                {(snap) => (
+                  <PlayerPostRound
+                    snapshot={snap}
+                    nickname={props.session.nickname}
+                    onRematch={() => {
+                      // GAME_OVER is FSM-terminal: rematch = fresh room via the
+                      // join door. Drop the dead session and start over.
+                      clearSession();
+                      props.onLost();
+                    }}
+                  />
+                )}
               </Show>
             </Show>
           }
