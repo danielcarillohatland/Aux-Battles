@@ -147,3 +147,10 @@ These were adjudicated during design review (`docs/review-report.md`, rulings A�
 - **Reason:** A process-global “latest session” could let activity in one concurrent room select another host's account or device, and an in-memory grant forced every host to reconnect after a routine restart.
 - **Alternatives:** One process-wide Spotify account (rejected: breaks room isolation); plaintext tokens in SQLite (rejected: violates the encryption boundary).
 - **Consequences:** Concurrent-room tests pin distinct queues/devices, OAuth tests pin host authorization/state replay, and restart tests verify that the persistence file contains ciphertext only. Manual playback remains available when a room has no live grant.
+
+### D-018 ✅ Phase 3 integration: submissions wiring + graceful search degradation
+- **Date:** 2026-08-25 (reviewer FAIL → resolved)
+- **Decision:** roundsRoute bound at composition root via an exposeRuntime seam (live phase + ALL_SUBMITTED dispatch through the FSM mutex); chicken-fill runs before the LOCKED advance on SONG_SELECTION timer expiry; search proxy degrades to the FakeProvider catalog on TOKEN_EXPIRED so song-picking works before host OAuth. Uniqueness enforced structurally in SubmissionStore (byPlayer/byMsg maps + JSON checkpoints) rather than DB constraints — DB-as-arbiter deferred to stage-1 per D-B.
+- **Reason:** Reviewer correctly blocked Phase 3 completion on the ~30-line wiring gap; degradation path prevents a party dead-end.
+- **Alternatives:** DB unique constraints now (rejected: stage-1 Postgres swap inherits them free); hard-fail search without OAuth (rejected: breaks pre-OAuth playtesting).
+- **Consequences:** Kick close-code split (4403 kicked vs 4001 superseded) accepted as better than spec; AUX-006 CLOSED (FSM-backed snapshots).

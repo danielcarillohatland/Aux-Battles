@@ -45,7 +45,7 @@
 - [x] L0 (API autoplay) AND L4 (manual) demo-able *(P6–P8 live probes pass; L4 is first-class)*
 - [x] **If major limitation found: STOP implementation, present findings to owner** *(none found)*
 
-## Phase 3 — Submissions & round flow *(complete)*
+## Phase 3 — Submissions & round flow *(complete — reviewer FAIL resolved by controller integration; gate 247/247)* *(complete)*
 - [x] `POST /rounds/:id/submissions` w/ idempotency (`client_msg_id`)
 - [x] Server-side shuffle (anonymity) + `submission_received` count-only broadcasts
 - [x] Song search UI (pinned search, sticky pick bar, SURE? confirm, sealed state)
