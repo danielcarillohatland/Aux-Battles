@@ -3,6 +3,7 @@
 node_modules
 **/dist
 **/dist-app
+*.tsbuildinfo
 var
 coverage
 *.log
