@@ -18,11 +18,18 @@ export class HostApiError extends Error {
 
 /** Unwraps the response envelope. Network/parse failures become code:'NETWORK'. */
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  // Only send a JSON content-type when there IS a JSON body — Fastify rejects
+  // `application/json` requests with an empty body (FST_ERR_CTP_EMPTY_JSON_BODY),
+  // which broke bodyless POSTs like Create Room.
+  const hasJsonBody = typeof init?.body === 'string';
   let res: Response;
   try {
     res = await fetch(path, {
-      headers: { 'content-type': 'application/json' },
       ...init,
+      headers: {
+        ...(hasJsonBody ? { 'content-type': 'application/json' } : {}),
+        ...(init?.headers as Record<string, string> | undefined),
+      },
     });
   } catch {
     throw new HostApiError('NETWORK', 'Could not reach the server.');
