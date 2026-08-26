@@ -213,6 +213,10 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
         tokens,
         devMode: cfg.devMode,
         secureCookies: env.NODE_ENV === 'production',
+        // Dev-only: return hosts to the live Vite frontend after OAuth (the
+        // API server serves no fresh frontend of its own). Prod: unset →
+        // same-origin /host.html. Never hardcoded to localhost.
+        frontendOrigin: cfg.devMode ? env.AUX_DEV_FRONTEND_ORIGIN : undefined,
         authorizeHost: (code, token) => {
           const room = roomManager.get(code);
           const host = room?.players.get(room.hostPlayerId);

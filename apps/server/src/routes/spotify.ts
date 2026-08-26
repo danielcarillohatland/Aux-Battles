@@ -26,10 +26,17 @@ export interface SpotifyRouteOptions {
   tokens: SpotifyTokenStore;
   devMode?: boolean;
   secureCookies?: boolean;
+  /**
+   * Where the OAuth callback sends the host's browser after "connected ✓".
+   * Dev: the Vite origin (the API server has no fresh frontend). Prod:
+   * omitted → same-origin `/host.html` served by this process.
+   */
+  frontendOrigin?: string | undefined;
   authorizeHost(code: string, token: string): boolean;
 }
 
-const CONNECTED_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>AUX BATTLES</title></head><body style="font-family:system-ui;display:grid;place-items:center;min-height:90vh"><main><h1>connected ✓</h1><p>Spotify is ready for this room.</p><p><a href="/host.html">Return to AUX BATTLES</a></p></main></body></html>`;
+const CONNECTED_HTML = (returnUrl: string) =>
+  `<!doctype html><html><head><meta charset="utf-8"><title>AUX BATTLES</title></head><body style="font-family:system-ui;display:grid;place-items:center;min-height:90vh"><main style="text-align:center"><h1>connected ✓</h1><p>Spotify is ready for this room.</p><p><a href="${returnUrl}" style="display:inline-block;margin-top:1rem;padding:.75rem 1.5rem;border-radius:12px;background:#7c3aed;color:#fff;text-decoration:none;font-weight:600">Return to AUX BATTLES</a></p><script>setTimeout(function(){location.href=${JSON.stringify(returnUrl)}},1500)</script></main></body></html>`;
 
 function sessionCookie(sessionToken: string, secure: boolean): string {
   // Host-session lifetime ≈ token store lifetime; HttpOnly + SameSite=Lax is
@@ -139,7 +146,14 @@ export function spotifyRoute(opts: SpotifyRouteOptions): FastifyPluginAsync {
         });
 
         void reply.header('set-cookie', sessionCookie(roomCode, opts.secureCookies === true));
-        void reply.type('text/html; charset=utf-8').code(200).send(CONNECTED_HTML);
+        // Return the host to the app that started the flow: the Vite origin in
+        // dev (fresh frontend lives there, not on this API server), same-origin
+        // host.html in production. Room code rides along so the host app's
+        // localStorage session reattaches to THIS room.
+        const returnUrl = opts.frontendOrigin
+          ? `${opts.frontendOrigin.replace(/\/$/, '')}/host.html?room=${encodeURIComponent(roomCode)}`
+          : '/host.html';
+        void reply.type('text/html; charset=utf-8').code(200).send(CONNECTED_HTML(returnUrl));
       },
     );
 

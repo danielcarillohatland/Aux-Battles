@@ -154,6 +154,70 @@ describe('room-bound Spotify OAuth routes', () => {
     expect(replay.statusCode).toBe(400);
     await app.close();
   });
+
+  it('callback return URL honors frontendOrigin (dev) vs same-origin (prod)', async () => {
+    // Dev configuration: hosts must land back on the live Vite frontend,
+    // pinned to their room, instead of the API server's stale static bundle.
+    const devApp = Fastify();
+    const devTokens = new MemoryTokenStore();
+    const states = new PkceStateStore();
+    await devApp.register(
+      spotifyRoute({
+        oauth: oauthClient(),
+        states,
+        tokens: devTokens,
+        frontendOrigin: 'https://dev.aux.example',
+        authorizeHost: () => true,
+      }),
+      { prefix: '/api/v1' },
+    );
+    await devApp.ready();
+
+    const login = await devApp.inject({
+      method: 'POST',
+      url: '/api/v1/rooms/ROOMA/spotify/login',
+      headers: { authorization: 'Bearer host-a' },
+    });
+    const state = new URL(
+      (login.json() as { data: { authorizeUrl: string } }).data.authorizeUrl,
+    ).searchParams.get('state');
+    const callback = await devApp.inject({
+      method: 'GET',
+      url: `/api/v1/spotify/callback?code=grant&state=${encodeURIComponent(state!)}`,
+    });
+    expect(callback.statusCode).toBe(200);
+    expect(callback.body).toContain('https://dev.aux.example/host.html?room=ROOMA');
+    await devApp.close();
+
+    // Prod configuration: no frontendOrigin → same-origin relative path.
+    const prodApp = Fastify();
+    await prodApp.register(
+      spotifyRoute({
+        oauth: oauthClient(),
+        states: new PkceStateStore(),
+        tokens: new MemoryTokenStore(),
+        authorizeHost: () => true,
+      }),
+      { prefix: '/api/v1' },
+    );
+    await prodApp.ready();
+
+    const prodLogin = await prodApp.inject({
+      method: 'POST',
+      url: '/api/v1/rooms/ROOMA/spotify/login',
+      headers: { authorization: 'Bearer host-a' },
+    });
+    const prodState = new URL(
+      (prodLogin.json() as { data: { authorizeUrl: string } }).data.authorizeUrl,
+    ).searchParams.get('state');
+    const prodCallback = await prodApp.inject({
+      method: 'GET',
+      url: `/api/v1/spotify/callback?code=grant&state=${encodeURIComponent(prodState!)}`,
+    });
+    expect(prodCallback.body).toContain('href="/host.html"');
+    expect(prodCallback.body).not.toContain('localhost');
+    await prodApp.close();
+  });
 });
 
 describe('encrypted Spotify token persistence', () => {

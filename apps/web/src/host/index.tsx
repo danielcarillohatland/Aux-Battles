@@ -15,9 +15,23 @@ const STORAGE_KEY = 'aux:host';
 
 function loadRoom(): CreateRoomResponse | null {
   try {
+    // OAuth callback return: ?room=CODE pins the restored session to the room
+    // the host was in when they left to authorize Spotify (server adds it).
+    const url = new URL(window.location.href);
+    const returnRoom = url.searchParams.get('room');
+    if (returnRoom) {
+      // Clean the URL so refreshes don't re-pin forever.
+      url.searchParams.delete('room');
+      window.history.replaceState({}, '', url.toString());
+    }
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const room = JSON.parse(raw) as Partial<CreateRoomResponse>;
+    // Returned for a DIFFERENT stored room: trust the URL, drop the stale one.
+    if (returnRoom && room.code !== undefined && room.code !== returnRoom) {
+      localStorage.removeItem(STORAGE_KEY);
+      return null;
+    }
     if (
       typeof room.code === 'string' &&
       typeof room.hostToken === 'string' &&
