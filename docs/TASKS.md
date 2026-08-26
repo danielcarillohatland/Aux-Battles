@@ -52,7 +52,7 @@
 - [x] LOCKED staging state; quorum early-fire; timer expiry → CHICKEN 🐔 random assignment
 - [x] Concurrency tests green
 
-## Phase 4 — AI Judge & reveal *(complete — timing polish remains a playtest gate)*
+## Phase 4 — AI Judge & reveal *(complete — gate 266/266)* *(complete — timing polish remains a playtest gate)*
 - [x] `LLMProvider` interface + OpenRouter impl (config-switchable)
 - [x] Batched judging: prompt build, strict schema parse, permutation validation, retries, fallback judge
 - [x] Results persistence + leaderboard math

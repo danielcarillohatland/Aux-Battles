@@ -154,3 +154,10 @@ These were adjudicated during design review (`docs/review-report.md`, rulings A�
 - **Reason:** Reviewer correctly blocked Phase 3 completion on the ~30-line wiring gap; degradation path prevents a party dead-end.
 - **Alternatives:** DB unique constraints now (rejected: stage-1 Postgres swap inherits them free); hard-fail search without OAuth (rejected: breaks pre-OAuth playtesting).
 - **Consequences:** Kick close-code split (4403 kicked vs 4001 superseded) accepted as better than spec; AUX-006 CLOSED (FSM-backed snapshots).
+
+### D-019 ✅ Judge consolidation + verdict broadcast shape
+- **Date:** 2026-08-26
+- **Decision:** Two parallel judge implementations were consolidated in favor of `judge/service.ts` (prompt/schema/service split); `judgement` WS frame carries `{payload:{results:[{rank,score,title,artist,explanation,nickname}]}}` best-first with roster nicknames joined at broadcast; results ride the orchestrator checkpoint slot rather than a new Checkpoint column; OpenRouter key absent ⇒ fully fallback-judged game.
+- **Reason:** Parallel work produced overlapping judge files; service.ts matched the LLMProvider seam cleanly and the orchestrator wiring landed against it. Broadcast shape serves the reveal UI directly.
+- **Alternatives:** Keep judge-service.ts (rejected: duplicate responsibility; folded/removed); new checkpoint field for judgements (rejected: optional orchestrator payload slot suffices).
+- **Consequences:** No OPENROUTER_API_KEY = deterministic hash-judged game (still fully playable); reveal data ships post-judging only — anonymity preserved until RESULTS.
