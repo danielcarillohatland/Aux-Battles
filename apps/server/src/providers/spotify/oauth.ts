@@ -11,6 +11,8 @@
  *    refresh T-120s before expiry on every read
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 const ACCOUNTS_BASE = 'https://accounts.spotify.com';
 const API_BASE = 'https://api.spotify.com/v1';
@@ -266,6 +268,8 @@ export interface EncryptedStoreOptions {
   /** Refresh when expiring within this window (default 120s — task contract). */
   refreshWindowMs?: number;
   now?: () => number;
+  /** Optional ciphertext file. Production points this at the persistent volume. */
+  filePath?: string;
 }
 
 interface SealedPayload {
@@ -295,7 +299,7 @@ function unseal(key: Buffer, sealed: SealedPayload): string {
 }
 
 /**
- * In-memory encrypted-at-rest store (spike persistence tier). Ciphertext only:
+ * Encrypted-at-rest token store with optional durable ciphertext persistence.
  * plaintext tokens exist solely during encrypt/decrypt/refresh. On every load
  * inside the refresh window it rotates the access token via the refresh grant
  * before handing anything out — callers never see a stale token.
@@ -309,25 +313,16 @@ export class EncryptedSpotifyTokenStore implements SpotifyTokenStore {
     if (opts.key.length !== 32) throw new Error('token encryption key must be 32 bytes');
     this.refreshWindowMs = opts.refreshWindowMs ?? 120_000;
     this.now = opts.now ?? Date.now;
+    this.loadFile();
   }
 
   get size(): number {
     return this.sealed.size;
   }
 
-  /**
-   * Most recently saved session token (Map insertion order), or null when no
-   * host has OAuthed yet. Bridge for the playback/search seam (single-host
-   * MVP): the newest session IS the host's.
-   */
-  latestSession(): string | null {
-    let last: string | null = null;
-    for (const key of this.sealed.keys()) last = key;
-    return last;
-  }
-
   async save(sessionToken: string, tokens: StoredTokens): Promise<void> {
     this.sealed.set(sessionToken, seal(this.opts.key, JSON.stringify(tokens)));
+    this.persistFile();
   }
 
   async load(sessionToken: string): Promise<StoredTokens | null> {
@@ -351,6 +346,7 @@ export class EncryptedSpotifyTokenStore implements SpotifyTokenStore {
       } catch (err) {
         if (err instanceof InvalidGrantError) {
           this.sealed.delete(sessionToken);
+          this.persistFile();
           return null;
         }
         // Transient failure + still some life left: serve current token.
@@ -359,6 +355,7 @@ export class EncryptedSpotifyTokenStore implements SpotifyTokenStore {
     }
     if (tokens.expiresAt - this.now() <= 0) {
       this.sealed.delete(sessionToken);
+      this.persistFile();
       return null;
     }
     return tokens;
@@ -366,5 +363,34 @@ export class EncryptedSpotifyTokenStore implements SpotifyTokenStore {
 
   async drop(sessionToken: string): Promise<void> {
     this.sealed.delete(sessionToken);
+    this.persistFile();
+  }
+
+  private loadFile(): void {
+    const file = this.opts.filePath;
+    if (file === undefined || !existsSync(file)) return;
+    try {
+      const parsed = JSON.parse(readFileSync(file, 'utf8')) as Record<string, SealedPayload>;
+      for (const [key, value] of Object.entries(parsed)) {
+        if (
+          typeof value?.iv === 'string' &&
+          typeof value.tag === 'string' &&
+          typeof value.ct === 'string'
+        ) {
+          this.sealed.set(key, value);
+        }
+      }
+    } catch {
+      // Corrupt token cache degrades to re-auth; it never blocks server boot.
+    }
+  }
+
+  private persistFile(): void {
+    const file = this.opts.filePath;
+    if (file === undefined) return;
+    mkdirSync(dirname(file), { recursive: true });
+    const temp = `${file}.${process.pid}.tmp`;
+    writeFileSync(temp, JSON.stringify(Object.fromEntries(this.sealed)), { mode: 0o600 });
+    renameSync(temp, file);
   }
 }

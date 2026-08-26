@@ -40,7 +40,7 @@
 ## Phase 2.5 — Spotify SPIKE *(complete — live Premium/device probes pass)*
 - [x] Day-one probes: preview_url DEAD (0/10), search limit>10 hard-rejected (400), rate ceiling >20-burst; live transfer/device probes P6–P8 pass
 - [x] Preload-and-verify playback orchestrator behind `MusicProvider`
-- [x] OAuth PKCE server-side flow + encrypted token store
+- [x] Host-authenticated, room-scoped OAuth PKCE flow + restart-durable encrypted token store
 - [x] Search proxy (`POST /search`)
 - [x] L0 (API autoplay) AND L4 (manual) demo-able *(P6–P8 live probes pass; L4 is first-class)*
 - [x] **If major limitation found: STOP implementation, present findings to owner** *(none found)*

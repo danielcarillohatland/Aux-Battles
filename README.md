@@ -40,6 +40,6 @@ fly secrets set AUX_TOKEN_KEY=... SPOTIFY_CLIENT_ID=... SPOTIFY_CLIENT_SECRET=..
 fly deploy
 ```
 
-Use a random 32-byte `AUX_TOKEN_KEY`. Keep one machine running: the MVP deliberately owns rooms and sockets in one process, with SQLite on `/data`. `/healthz` is the liveness endpoint; `/dev/state` and Spotify token debugging exist only with `AUX_DEV_MODE=1`.
+Use a random 32-byte `AUX_TOKEN_KEY`. Spotify grants are encrypted per room and persisted as ciphertext on `/data`. Keep one machine running: the MVP deliberately owns rooms and sockets in one process, with SQLite on `/data`. `/healthz` is the liveness endpoint; `/dev/state` and Spotify token debugging exist only with `AUX_DEV_MODE=1`.
 
 Architecture and product decisions live in [docs/TDD.md](docs/TDD.md), operational/playtest gates in [docs/PLAYTEST.md](docs/PLAYTEST.md), and current completion status in [docs/TASKS.md](docs/TASKS.md).

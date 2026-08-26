@@ -202,6 +202,45 @@ describe('RoundOrchestrator snapshots (AUX-006)', () => {
 // ── Playback selection (L0/L4) ───────────────────────────────────────────────
 
 describe('playback mode selection (D-E)', () => {
+  it('keeps playback providers and tokens isolated between concurrent rooms', async () => {
+    const roomManager = new RoomManager();
+    const { hub } = stubHub();
+    const rows: StoredSubmission[] = [];
+    const orch = new RoundOrchestrator({
+      roomManager,
+      wsHub: hub,
+      submissions: fakeSubmissions(rows),
+    });
+    const providers = new Map<string, StubProvider>();
+    orch.setPlaybackFactory((code) => {
+      const provider = new StubProvider();
+      provider.device = { id: `device-${code}`, name: `Speaker ${code}` };
+      providers.set(code, provider);
+      return { provider, sessionProbe: liveProbe };
+    });
+
+    const first = roomManager.createRoom().code;
+    const second = roomManager.createRoom().code;
+    rows.push(sub(first, 0, 'a', 'track-a'), sub(second, 0, 'b', 'track-b'));
+    const firstFsm = new RoomFsm({ code: first, onChange: (c) => orch.onTransition(c) });
+    const secondFsm = new RoomFsm({ code: second, onChange: (c) => orch.onTransition(c) });
+    orch.register(first, firstFsm);
+    orch.register(second, secondFsm);
+
+    await driveToLocked(firstFsm);
+    await driveToLocked(secondFsm);
+    await firstFsm.dispatch('BEGIN_PLAYBACK');
+    await secondFsm.dispatch('BEGIN_PLAYBACK');
+    await tick(20);
+
+    expect(providers.get(first)?.started).toEqual([
+      { uris: ['spotify:track:track-a'], deviceId: `device-${first}` },
+    ]);
+    expect(providers.get(second)?.started).toEqual([
+      { uris: ['spotify:track:track-b'], deviceId: `device-${second}` },
+    ]);
+  });
+
   it('api mode: ONE startPlayback with the full shuffled queue when live + device', async () => {
     const provider = new StubProvider();
     const { orch, code, fsm, frames } = lockedRoom({

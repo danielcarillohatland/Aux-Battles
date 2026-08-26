@@ -128,6 +128,12 @@ interface QueueWatch {
   misses: number;
   sawQueueTrack: boolean;
   timer: NodeJS.Timeout;
+  poller?: PlaybackStateProbe;
+}
+
+export interface RoomPlaybackBinding {
+  provider: MusicProvider;
+  sessionProbe: LiveSessionProbe;
 }
 
 export class RoundOrchestrator {
@@ -136,6 +142,7 @@ export class RoundOrchestrator {
   private provider: MusicProvider | undefined;
   private probe: LiveSessionProbe | undefined;
   private stateProbe: PlaybackStateProbe | undefined;
+  private playbackFactory: ((code: string) => RoomPlaybackBinding) | undefined;
 
   /** code → live FSM (registered by game-runtimes at creation/rehydration). */
   private readonly fsms = new Map<string, RoomFsm>();
@@ -185,6 +192,11 @@ export class RoundOrchestrator {
     }
   }
 
+  /** Production binding: each room resolves its own host token/provider. */
+  setPlaybackFactory(factory: (code: string) => RoomPlaybackBinding): void {
+    this.playbackFactory = factory;
+  }
+
   /** Attach/replace the submission read view (wired late at the composition root). */
   setSubmissions(store: SubmissionStoreView | undefined): void {
     this.opts.submissions = store;
@@ -230,7 +242,7 @@ export class RoundOrchestrator {
 
   // ── Runtime registry (fed by game-runtimes.ts) ──────────────────────────────
 
-  /** Register a room's FSM; re-arms the placeholder-judge deadline after rehydration. */
+  /** Register a room's FSM; re-arms the fallback-judge deadline after rehydration. */
   register(code: string, fsm: RoomFsm): void {
     this.fsms.set(code, fsm);
     if (fsm.state === 'AI_JUDGING' && fsm.phaseEndsAt !== null) {
@@ -261,8 +273,6 @@ export class RoundOrchestrator {
    * forget and never block the mutex.
    */
   onTransition(change: FsmChange): void {
-    // Refresh the cached mode opportunistically (sync snapshot reads stay cheap).
-    void this.refreshSessionLiveness(change.code);
     if (change.event === 'PICK_CATEGORY' && change.payload?.category !== undefined) {
       this.categories.set(change.code, change.payload.category);
       this.scenarios.set(
@@ -372,17 +382,25 @@ export class RoundOrchestrator {
     this.queues.set(code, subs);
     this.playbackIndexes.set(code, 0);
     const uris = subs.map((s) => trackUri(s.track.id));
+    const binding = this.playbackFactory?.(code);
+    const provider = binding?.provider ?? this.provider;
+    const probe = binding?.sessionProbe ?? this.probe;
+    const poller =
+      provider !== undefined && 'getPlaybackState' in provider
+        ? (provider as unknown as PlaybackStateProbe)
+        : this.stateProbe;
 
     let mode: PlaybackMode = 'manual';
-    if (this.provider !== undefined && (await this.hasLiveSession()) && uris.length > 0) {
-      const device = await this.provider.getActiveDevice().catch(() => null);
+    if (provider !== undefined && (await this.hasLiveSession(probe)) && uris.length > 0) {
+      const device = await provider.getActiveDevice().catch(() => null);
       if (device !== null) {
         try {
-          await this.provider.startPlayback({ uris, deviceId: device.id });
+          await provider.startPlayback({ uris, deviceId: device.id });
           mode = 'api';
           this.startQueueWatch(
             code,
             subs.map((s) => s.track.id),
+            poller,
           );
         } catch (err) {
           this.opts.log?.warn({ code, err }, 'startPlayback failed — manual playback fallback');
@@ -413,27 +431,16 @@ export class RoundOrchestrator {
     return 'advanced';
   }
 
-  private async hasLiveSession(): Promise<boolean> {
-    if (this.probe === undefined) return false;
+  private async hasLiveSession(probe: LiveSessionProbe | undefined): Promise<boolean> {
+    if (probe === undefined) return false;
     try {
-      return (await this.probe.getAccessToken()) !== null;
+      return (await probe.getAccessToken()) !== null;
     } catch {
       return false;
     }
   }
 
-  /** Fire-and-forget cache refresh so snapshots reflect OAuth without async seams. */
-  private lastLivenessCheck = 0;
-  private livenessCache = false;
-  private async refreshSessionLiveness(_code: string): Promise<void> {
-    if (this.probe === undefined) return;
-    const now = Date.now();
-    if (now - this.lastLivenessCheck < 30_000) return;
-    this.lastLivenessCheck = now;
-    this.livenessCache = await this.hasLiveSession();
-  }
-
-  private startQueueWatch(code: string, trackIds: string[]): void {
+  private startQueueWatch(code: string, trackIds: string[], poller?: PlaybackStateProbe): void {
     this.stopQueueWatch(code);
     // Total queue duration from stored submissions; durationMs is optional per
     // Track, so unknown entries fall back to a conservative per-track estimate.
@@ -452,6 +459,7 @@ export class RoundOrchestrator {
       startedAt: Date.now(),
       misses: 0,
       sawQueueTrack: false,
+      ...(poller !== undefined ? { poller } : {}),
       timer: setInterval(() => void this.pollQueue(code), this.opts.pollMs ?? QUEUE_POLL_MS),
     };
     watch.timer.unref();
@@ -477,7 +485,7 @@ export class RoundOrchestrator {
       this.stopQueueWatch(code);
       return;
     }
-    const poller = this.stateProbe;
+    const poller = watch.poller;
     if (poller === undefined) {
       this.stopQueueWatch(code);
       return;
@@ -517,8 +525,8 @@ export class RoundOrchestrator {
 
   /**
    * The AI_JUDGING 20 s timeout delegates here (controller callback, TDD §8):
-   * log, then immediately dispatch JUDGEMENT_STORED with placeholder results so
-   * RESULTS/LEADERBOARD are reachable end-to-end before the judge exists.
+   * run the configured judge (which owns deterministic fallback), then dispatch
+   * JUDGEMENT_STORED so RESULTS/LEADERBOARD remain reachable on provider failure.
    */
   private async startJudging(code: string): Promise<void> {
     const fsm = this.fsms.get(code);

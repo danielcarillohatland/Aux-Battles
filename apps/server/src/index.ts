@@ -3,9 +3,8 @@
  * Composition root: config → analytics → (Phase 2) RoomManager/WS hub → routes.
  * Single process owns REST + WS + game state (D-G).
  */
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
@@ -34,6 +33,7 @@ import {
   type SpotifyTokenStore as PlaybackTokenStore,
 } from './providers/spotify/index.js';
 import type { MusicProvider } from './providers/music-provider.js';
+import { verifyToken } from './core/tokens.js';
 import { searchRoute } from './routes/search.js';
 import { SubmissionStore } from './core/submissions.js';
 import { roundsRoute } from './routes/rounds.js';
@@ -42,16 +42,13 @@ import { JudgeService } from './judge/judge-service.js';
 import { OpenRouterProvider } from './judge/openrouter-provider.js';
 
 /**
- * Bridge the two token seams (Phase 2.5 oauth ↔ Phase 3 playback): the OAuth
- * store is session-keyed while SpotifyProvider wants a bare getAccessToken().
- * Single-host MVP: the most recently saved OAuth session IS the host's.
+ * Bridge the two token seams (OAuth ↔ playback) without exposing room identity
+ * to the provider. Each adapter is permanently scoped to one room.
  */
-function hostPlaybackTokens(store: EncryptedSpotifyTokenStore): PlaybackTokenStore {
+function roomPlaybackTokens(store: EncryptedSpotifyTokenStore, code: string): PlaybackTokenStore {
   return {
     async getAccessToken() {
-      const session = store.latestSession();
-      if (session === null) return null; // host never OAuthed
-      const tokens = await store.load(session);
+      const tokens = await store.load(`room:${code}`);
       return tokens?.accessToken ?? null;
     },
   };
@@ -109,12 +106,14 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
     const checkpoint = store.get(code)?.state as { room?: SerializedRoom | null } | undefined;
     if (checkpoint?.room != null) roomManager.hydrate(code, checkpoint.room);
   }
+  let dropSpotifyTokens: ((code: string) => void) | undefined;
   const expireRoom = (code: string, reason: string): void => {
     wsHub.closeRoom(code, reason);
     orchestrator.forget(code);
     submissions.clearRoom(code);
     roomManager.delete(code);
     store.delete(code);
+    dropSpotifyTokens?.(code);
   };
   const stopTtlSweeper = startTtlSweeper(60_000, () => {
     // TTL/cleanup ONLY (D-C) — never a state-advancer.
@@ -184,12 +183,30 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
   // ONLY when credentials exist — the game runs fine without them (manual mode).
   // The SAME branch picks the MusicProvider for the Phase-3 search proxy:
   // SpotifyProvider when live, FakeProvider otherwise (deterministic catalog).
-  let provider: MusicProvider = new FakeProvider();
+  const provider: MusicProvider = new FakeProvider();
+  let providerForRoom: ((code: string) => MusicProvider) | undefined;
   const spotifyEnv = loadSpotifyEnv(env);
   if (spotifyEnv) {
     const oauth = new SpotifyOAuth(spotifyEnv);
     const tokenKey = tokenEncryptionKey(env, spotifyEnv.clientSecret);
-    const tokens = new EncryptedSpotifyTokenStore({ key: tokenKey, oauth });
+    const dbFile = env.AUX_DB_FILE;
+    const tokenFile =
+      env.AUX_SPOTIFY_TOKEN_FILE?.trim() ||
+      (dbFile !== undefined && dbFile !== ':memory:'
+        ? resolve(dirname(resolve(dbFile)), 'spotify-tokens.json')
+        : undefined);
+    const tokens = new EncryptedSpotifyTokenStore({
+      key: tokenKey,
+      oauth,
+      ...(tokenFile === undefined ? {} : { filePath: tokenFile }),
+    });
+    providerForRoom = (code: string): SpotifyProvider =>
+      new SpotifyProvider({ tokenStore: roomPlaybackTokens(tokens, code) });
+    dropSpotifyTokens = (code) => {
+      void tokens
+        .drop(`room:${code}`)
+        .catch((err: unknown) => log.log.warn({ code, err }, 'failed to purge Spotify tokens'));
+    };
     await log.register(
       spotifyRoute({
         oauth,
@@ -197,14 +214,19 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
         tokens,
         devMode: cfg.devMode,
         secureCookies: env.NODE_ENV === 'production',
+        authorizeHost: (code, token) => {
+          const room = roomManager.get(code);
+          const host = room?.players.get(room.hostPlayerId);
+          return host !== undefined && verifyToken(token, host.tokenHash);
+        },
       }),
       { prefix: '/api/v1' },
     );
-    provider = new SpotifyProvider({ tokenStore: hostPlaybackTokens(tokens) });
-    // L0 API playback (TDD §7): the same token bridge doubles as the live-
-    // session probe — null access token ⇒ manual mode per D-E.
-    orchestrator.setPlayback(provider, hostPlaybackTokens(tokens));
-    log.log.info('Spotify OAuth routes registered (Dev Mode spike)');
+    orchestrator.setPlaybackFactory((code) => {
+      const sessionProbe = roomPlaybackTokens(tokens, code);
+      return { provider: providerForRoom!(code), sessionProbe };
+    });
+    log.log.info('Room-scoped Spotify OAuth routes registered');
   } else {
     log.log.warn('SPOTIFY_* env missing — OAuth disabled, manual playback only');
   }
@@ -214,9 +236,15 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
   // catalog so song-picking always works. Live Spotify search resumes as
   // soon as a session exists (provider swapped above).
   const searchFallback = new FakeProvider();
-  await log.register(searchRoute({ provider, roomManager, fallback: searchFallback }), {
-    prefix: '/api/v1',
-  });
+  await log.register(
+    searchRoute({
+      provider,
+      ...(providerForRoom === undefined ? {} : { providerForRoom }),
+      roomManager,
+      fallback: searchFallback,
+    }),
+    { prefix: '/api/v1' },
+  );
 
   // Phase-3 submissions (TDD §6): idempotent, anonymous, quorum early-fire.
   await log.register(

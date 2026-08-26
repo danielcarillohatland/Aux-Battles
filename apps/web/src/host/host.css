@@ -131,6 +131,10 @@
 .qr-panel canvas {
   border-radius: 12px;
 }
+
+.spotify-connect {
+  margin: 0.25rem auto 1rem;
+}
 .join-url {
   margin: 0;
   color: #9b9bb4;

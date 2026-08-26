@@ -140,3 +140,10 @@ These were adjudicated during design review (`docs/review-report.md`, rulings A�
 - **Reason:** End-to-end audit found that the previous Phase 3 implementation could not authenticate browser search, could not complete manual playback, lost roster/submissions on restart, and used a timer-only placeholder judge.
 - **Alternatives:** Keep post-round state ephemeral (rejected: restart mid-reveal would corrupt the party); require an LLM key (rejected: external outages may never stall a room).
 - **Consequences:** Manual and API modes reach RESULTS; worst-to-best reveals update a persisted leaderboard; missing Spotify/LLM credentials degrade cleanly. Full-game and SIGKILL-style restart integration tests pin the behavior.
+
+### D-019 ✅ Spotify authorization and playback are room-scoped
+- **Date:** 2026-08-25
+- **Decision:** Only an authenticated room host may start Spotify OAuth. PKCE state binds the callback to that room, and search/playback resolve a provider through the room's encrypted token key. Ciphertext persists beside SQLite (or at `AUX_SPOTIFY_TOKEN_FILE`) and is purged when the room expires.
+- **Reason:** A process-global “latest session” could let activity in one concurrent room select another host's account or device, and an in-memory grant forced every host to reconnect after a routine restart.
+- **Alternatives:** One process-wide Spotify account (rejected: breaks room isolation); plaintext tokens in SQLite (rejected: violates the encryption boundary).
+- **Consequences:** Concurrent-room tests pin distinct queues/devices, OAuth tests pin host authorization/state replay, and restart tests verify that the persistence file contains ciphertext only. Manual playback remains available when a room has no live grant.

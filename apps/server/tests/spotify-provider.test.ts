@@ -3,13 +3,10 @@
  * Per docs/testing-strategy.md: CI NEVER calls real Spotify. The provider's
  * fetchImpl + tokenStore edges are injected (see fake/fake-spotify-transport.ts
  * for the seam coordinated with providers/spotify/index.ts).
- *
- * Until src/providers/spotify/index.ts lands (or matches the seam), this suite
- * reports SKIPPED with the reason so the gate stays green; it activates and
- * enforces the contract automatically the moment the export appears.
  */
-import { beforeAll, describe, expect, it, type TestContext } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { MusicProviderError } from '../src/providers/music-provider.js';
+import { SpotifyProvider } from '../src/providers/spotify/index.js';
 import { TrackSchema } from '@aux/shared';
 import {
   FakeSpotifyTransport,
@@ -21,62 +18,13 @@ import {
   spotifySearchResponse,
 } from '../src/providers/fake/fake-spotify-transport.js';
 
-type ProviderCtor = new (deps: { tokenStore: unknown; fetchImpl?: unknown }) => {
-  search(query: string, limit?: number): Promise<unknown[]>;
-  getTrack(id: string): Promise<unknown>;
-  startPlayback(req: { uris: string[]; deviceId?: string; positionMs?: number }): Promise<void>;
-  getPlaybackState(): Promise<unknown>;
-};
-
-interface Harness {
-  make(): { provider: InstanceType<ProviderCtor>; transport: FakeSpotifyTransport };
-}
-
-let harness: Harness | null = null;
-let skipReason = '';
-
-beforeAll(async () => {
-  try {
-    const mod = (await import('../src/providers/spotify/index.js')) as Record<string, unknown>;
-    const Ctor = (mod.SpotifyProvider ?? mod.default) as ProviderCtor | undefined;
-    if (typeof Ctor !== 'function') {
-      skipReason = 'spotify/index.ts landed but exports neither SpotifyProvider nor default';
-      return;
-    }
-    const make = () => {
-      const transport = new FakeSpotifyTransport();
-      // fetchImpl is typed `typeof fetch` upstream; the fake is duck-compatible
-      // at runtime (ok/status/headers.get/text), so bridge via unknown.
-      const provider = new Ctor({
-        tokenStore: new FakeTokenStore(),
-        fetchImpl: transport.fetch as unknown as typeof fetch,
-      });
-      return { provider, transport } as never;
-    };
-    try {
-      const probe = make() as { provider: Record<string, unknown> };
-      if (
-        typeof probe.provider.search !== 'function' ||
-        typeof probe.provider.startPlayback !== 'function' ||
-        typeof probe.provider.getPlaybackState !== 'function'
-      ) {
-        skipReason = 'SpotifyProvider lacks search/startPlayback/getPlaybackState';
-        return;
-      }
-      harness = { make };
-    } catch {
-      skipReason =
-        'constructor does not accept { tokenStore, fetchImpl } — see fake-spotify-transport.ts header';
-    }
-  } catch (e) {
-    skipReason = `src/providers/spotify/index.ts not implemented yet (${(e as Error).message.split('\n')[0]})`;
-  }
-});
-
-/** Skip the individual test when the implementation hasn't landed / mismatches. */
-function requireHarness(ctx: TestContext): Harness {
-  if (harness === null) ctx.skip(true, skipReason);
-  return harness as Harness;
+function make() {
+  const transport = new FakeSpotifyTransport();
+  const provider = new SpotifyProvider({
+    tokenStore: new FakeTokenStore(),
+    fetchImpl: transport.fetch as unknown as typeof fetch,
+  });
+  return { provider, transport };
 }
 
 const providerErr = async (p: Promise<unknown>): Promise<MusicProviderError> => {
@@ -90,8 +38,7 @@ const providerErr = async (p: Promise<unknown>): Promise<MusicProviderError> => 
 };
 
 describe('SpotifyProvider contract (fake transport)', () => {
-  it('search maps Spotify API shape → shared Track schema', async (ctx) => {
-    const { make } = requireHarness(ctx);
+  it('search maps Spotify API shape → shared Track schema', async () => {
     const apiItem = spotifyApiTrack();
     const { provider, transport } = make();
     transport.enqueue(spotifySearchResponse([apiItem]));
@@ -104,8 +51,7 @@ describe('SpotifyProvider contract (fake transport)', () => {
     expect(results[0]).toEqual(expectedTrackFrom(apiItem));
   });
 
-  it('search hits /v1/search with query+type+limit and Bearer token', async (ctx) => {
-    const { make } = requireHarness(ctx);
+  it('search hits /v1/search with query+type+limit and Bearer token', async () => {
     const { provider, transport } = make();
     transport.enqueue(spotifySearchResponse([]));
 
@@ -121,8 +67,7 @@ describe('SpotifyProvider contract (fake transport)', () => {
     expect(req.headers.authorization ?? req.headers.Authorization).toMatch(/^Bearer .+/);
   });
 
-  it('429 + Retry-After → MusicProviderError RATE_LIMITED carrying retryAfterSecs', async (ctx) => {
-    const { make } = requireHarness(ctx);
+  it('429 + Retry-After → MusicProviderError RATE_LIMITED carrying retryAfterSecs', async () => {
     const { provider, transport } = make();
     transport.enqueue(jsonResponse(429, {}, { 'Retry-After': '30' }));
 
@@ -132,8 +77,7 @@ describe('SpotifyProvider contract (fake transport)', () => {
     expect(err.retryAfterSecs).toBe(30);
   });
 
-  it('401 → TOKEN_EXPIRED', async (ctx) => {
-    const { make } = requireHarness(ctx);
+  it('401 → TOKEN_EXPIRED', async () => {
     const { provider, transport } = make();
     transport.enqueue(jsonResponse(401, { error: { status: 401, message: 'bad token' } }));
 
@@ -142,8 +86,7 @@ describe('SpotifyProvider contract (fake transport)', () => {
     expect(err.code).toBe('TOKEN_EXPIRED');
   });
 
-  it('403 premium_required → NOT_PREMIUM', async (ctx) => {
-    const { make } = requireHarness(ctx);
+  it('403 premium_required → NOT_PREMIUM', async () => {
     const { provider, transport } = make();
     transport.enqueue(
       jsonResponse(403, {
@@ -156,8 +99,7 @@ describe('SpotifyProvider contract (fake transport)', () => {
     expect(err.code).toBe('NOT_PREMIUM');
   });
 
-  it('no active device → NO_ACTIVE_DEVICE', async (ctx) => {
-    const { make } = requireHarness(ctx);
+  it('no active device → NO_ACTIVE_DEVICE', async () => {
     const { provider, transport } = make();
     transport.enqueue(
       jsonResponse(404, {
@@ -170,8 +112,7 @@ describe('SpotifyProvider contract (fake transport)', () => {
     expect(err.code).toBe('NO_ACTIVE_DEVICE');
   });
 
-  it('startPlayback sends ONE request: whole round queue as a single uris array', async (ctx) => {
-    const { make } = requireHarness(ctx);
+  it('startPlayback sends ONE request: whole round queue as a single uris array', async () => {
     const { provider, transport } = make();
     transport.setFallback(() => jsonResponse(204, {}));
 
@@ -194,8 +135,7 @@ describe('SpotifyProvider contract (fake transport)', () => {
     expect(body.position_ms).toBe(0);
   });
 
-  it('verify-only polling helper returns normalized playback state', async (ctx) => {
-    const { make } = requireHarness(ctx);
+  it('verify-only polling helper returns normalized playback state', async () => {
     const playing = make();
     playing.transport.enqueue(
       jsonResponse(200, {
@@ -225,7 +165,7 @@ describe('SpotifyProvider contract (fake transport)', () => {
   });
 });
 
-// ── Always-on: fixture/schema sanity that runs even before the impl lands ────
+// ── Fixture/schema sanity ────────────────────────────────────────────────────
 
 describe('fake spotify fixtures', () => {
   it('fixture API item maps onto the shared Track schema', () => {

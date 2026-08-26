@@ -5,8 +5,8 @@
  * be established. Failures never dead-end: last-known roster stays up under
  * an amber retry banner. Zero animation delays (owner condition #10).
  *
- * Phase 2 wiring: Start Game (LOBBY → CATEGORY) and a category picker
- * placeholder (CATEGORY → SCENARIO) — both thin REST calls per D-D.
+ * Host controls are thin authenticated REST calls; Spotify authorization is
+ * room-bound and optional, so manual playback remains a complete fallback.
  */
 import { createSignal, createEffect, onCleanup, onMount, For, Show } from 'solid-js';
 import QRCode from 'qrcode';
@@ -42,6 +42,8 @@ export const HostLobby = (props: HostLobbyProps) => {
   const [fatal, setFatal] = createSignal<string | null>(null);
   const [actionBusy, setActionBusy] = createSignal(false);
   const [actionError, setActionError] = createSignal<string | null>(null);
+  const [spotifyAvailable, setSpotifyAvailable] = createSignal(false);
+  const [spotifyConnected, setSpotifyConnected] = createSignal(false);
   let canvasRef: HTMLCanvasElement | undefined;
 
   // Realtime engine: WS-first with built-in polling fallback + reconnect.
@@ -56,6 +58,18 @@ export const HostLobby = (props: HostLobbyProps) => {
           ev.kind === 'kicked' ? 'You were removed from the room.' : errorText('ROOM_CLOSED'),
         ),
     });
+    void apiRequest<{ connected: boolean }>(
+      `/api/v1/rooms/${encodeURIComponent(props.room.code)}/spotify/status`,
+      { headers: { authorization: `Bearer ${props.room.hostToken}` } },
+    )
+      .then(({ connected }) => {
+        setSpotifyAvailable(true);
+        setSpotifyConnected(connected);
+      })
+      .catch(() => {
+        // Spotify credentials are optional; an unregistered route means the
+        // fully functional manual-playback experience should stay uncluttered.
+      });
   });
   onCleanup(() => rt?.stop());
 
@@ -66,6 +80,28 @@ export const HostLobby = (props: HostLobbyProps) => {
   const connState = () => rt?.connState() ?? 'connecting';
 
   const degraded = () => connState() === 'reconnecting' || connState() === 'polling';
+
+  const connectSpotify = async () => {
+    if (actionBusy() || spotifyConnected()) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      const { authorizeUrl } = await apiRequest<{ authorizeUrl: string }>(
+        `/api/v1/rooms/${encodeURIComponent(props.room.code)}/spotify/login`,
+        {
+          method: 'POST',
+          headers: { authorization: `Bearer ${props.room.hostToken}` },
+          body: JSON.stringify({}),
+        },
+      );
+      location.assign(authorizeUrl);
+    } catch (err) {
+      setActionError(
+        err instanceof HostApiError ? errorText(err.code) : 'Could not connect Spotify.',
+      );
+      setActionBusy(false);
+    }
+  };
 
   const advanceManual = async () => {
     if (actionBusy()) return;
@@ -210,6 +246,17 @@ export const HostLobby = (props: HostLobbyProps) => {
           <canvas ref={canvasRef} aria-label={`QR code joining ${joinUrl}`} />
           <p class="join-url">{joinUrl}</p>
         </div>
+
+        <Show when={spotifyAvailable()}>
+          <button
+            type="button"
+            class="btn-secondary spotify-connect"
+            disabled={actionBusy() || spotifyConnected()}
+            onClick={() => void connectSpotify()}
+          >
+            {spotifyConnected() ? 'Spotify connected ✓' : 'Connect Spotify'}
+          </button>
+        </Show>
 
         {/* Connection health: amber while reconnecting or on the polling fallback. */}
         <div class="banner banner-warn" role="status" hidden={!degraded()}>

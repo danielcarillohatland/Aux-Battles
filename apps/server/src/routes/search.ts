@@ -21,6 +21,9 @@ const QUERY_MAX = 120;
 
 export interface SearchRouteOptions {
   provider: import('../providers/music-provider.js').MusicProvider;
+  providerForRoom?: (
+    code: string,
+  ) => import('../providers/music-provider.js').MusicProvider | undefined;
   /** Used when the primary provider fails w/ TOKEN_EXPIRED (host not OAuthed). */
   fallback?: import('../providers/music-provider.js').MusicProvider;
   roomManager: RoomManager;
@@ -78,7 +81,8 @@ export function searchRoute(opts: SearchRouteOptions): FastifyPluginAsync {
             : SEARCH_LIMIT_MAX;
 
         try {
-          const tracks = await provider.search(q, limit);
+          const roomProvider = opts.providerForRoom?.(auth.code) ?? provider;
+          const tracks = await roomProvider.search(q, limit);
           return reply.send({ ok: true as const, data: { tracks } });
         } catch (err) {
           if (err instanceof MusicProviderError) {

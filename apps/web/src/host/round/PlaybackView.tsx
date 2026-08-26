@@ -5,12 +5,10 @@
  *    locally from the moment the current track went up (the round clock is
  *    paused in PLAYBACK — it ends on QUEUE_DONE / host taps, not a deadline).
  *  - mode `manual` / `silent`: mount the existing ManualPlayback card fed the
- *    round queue; advancing flows up through onManualAdvance (REST per D-D
- *    once the playback endpoints land).
+ *    round queue; advancing flows up through onManualAdvance (REST per D-D).
  *
- * The queue mirror comes from the parent until the submissions/playback state
- * endpoint lands; without it the card shows a graceful placeholder instead of
- * pretending to know what's playing.
+ * The authoritative queue and index arrive in the room snapshot; an empty
+ * queue still renders a truthful waiting state during synchronization.
  */
 import { createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js';
 import type { Track } from '@aux/shared';
@@ -18,7 +16,7 @@ import { ManualPlayback } from '../manual-playback.js';
 
 export interface PlaybackViewProps {
   mode: 'api' | 'manual' | 'silent';
-  /** This round's queue mirror, in play order (may be empty pre-Phase-3 wire). */
+  /** This round's queue, in play order (may be briefly empty while syncing). */
   queue: Track[];
   /** Index of the track currently up in the queue mirror. */
   currentIndex: number;
