@@ -16,9 +16,10 @@
  *    fires QUEUE_DONE when playback leaves the queue past its last track (or a
  *    hard duration cap trips). Manual mode ends via the host's `queue_done`
  *    action.
- *  - Placeholder judge handoff (Phase 4 lands the real judge): entering
- *    AI_JUDGING arms the phase deadline; expiry logs and immediately dispatches
- *    JUDGEMENT_STORED so the flow reaches RESULTS/LEADERBOARD end-to-end today.
+ *  - Batched judge (Phase 4, TDD §8): entering AI_JUDGING arms the phase
+ *    deadline as a failsafe and calls judgeRound over the LLMProvider seam
+ *    (retries + deterministic hash fallback live inside the judge). The stored
+ *    verdict dispatches JUDGEMENT_STORED and rides a `judgement` WS frame.
  */
 import { randomInt } from 'node:crypto';
 import type { FsmState, PlaybackMode, Snapshot } from '@aux/shared';
@@ -31,7 +32,10 @@ import type { FsmChange } from '../fsm/types.js';
 import type { WsHub, WsViewer } from '../ws/types.js';
 import type { MusicProvider } from '../providers/music-provider.js';
 import type { StoredSubmission } from './submissions.js';
-import { fallbackJudge, type JudgeService, type JudgedEntry } from '../judge/judge-service.js';
+import { pointsForRank, ResultsStore, type ResultsPayload } from './results.js';
+import type { JudgeEntry, JudgedEntry } from '../judge/judge-service.js';
+import type { LLMProvider } from '../judge/llm-provider.js';
+import { judgeRound, type JudgeRoundOutput, type JudgeRoundSong } from '../judge/service.js';
 
 /**
  * Read-only view of the submission engine (core/submissions.ts implements this
@@ -70,9 +74,21 @@ export interface RoundOrchestratorOptions {
   log?: FastifyBaseLogger | undefined;
   /** Read view of core/submissions.ts; counts degrade to 0/false when absent. */
   submissions?: SubmissionStoreView | undefined;
+  /**
+   * Phase-4 judgement persistence (TDD §6): durable per-round judgement rows +
+   * rank-points leaderboard math. When attached, every stored judgement rides
+   * the orchestrator checkpoint fragment (`judgements`) so results and the
+   * rank-points standings survive restarts.
+   */
+  results?: ResultsStore | undefined;
   /** Verify-poll cadence override (tests inject small values). */
   pollMs?: number | undefined;
-  judge?: JudgeService | undefined;
+  /**
+   * LLM seam (D-012) handed to judgeRound (TDD §8). Absent/null → the
+   * deterministic hash fallback judges every round; an outage or timeout
+   * degrades to the same path — a party never stalls on the vendor.
+   */
+  llm?: LLMProvider | undefined;
 }
 
 export interface OrchestratorPayload {
@@ -90,6 +106,12 @@ export interface OrchestratorPayload {
     totalScore: number;
     wins: number;
   }>;
+  /**
+   * Phase-4 addition (OPTIONAL — checkpoint shape stays backward compatible):
+   * raw §6 judgement rows from core/results.ts, so a restart can recompute the
+   * rank-points leaderboard from source records, not just the cached board.
+   */
+  judgements?: ResultsPayload;
 }
 
 /** Verify-don't-drive cadence (TDD §7: 5–10 s). */
@@ -106,6 +128,31 @@ export function roundIdOf(code: string, roundIdx: number): string {
 /** Track id → playable URI (search results carry bare ids; stores may too). */
 function trackUri(id: string): string {
   return id.startsWith('spotify:') ? id : `spotify:track:${id}`;
+}
+
+/** Submissions → numbered judge batch (0-based songIndex, per judge/schema.ts). */
+function songsOf(entries: readonly JudgeEntry[]): JudgeRoundSong[] {
+  return entries.map((entry, index) => ({
+    index,
+    id: entry.track.id,
+    title: entry.track.title,
+    artist: entry.track.artist,
+  }));
+}
+
+/** Re-attach round ownership to a validated judge output (songIndex → entry). */
+function entriesToJudged(entries: readonly JudgeEntry[], output: JudgeRoundOutput): JudgedEntry[] {
+  return output.results.map((result) => {
+    const entry = entries[result.songIndex];
+    if (entry === undefined) throw new Error(`judge judged unknown songIndex ${result.songIndex}`);
+    return {
+      ...entry,
+      rank: result.rank,
+      score: result.score,
+      explanation: result.explanation,
+      judgeModel: result.judgeModel,
+    };
+  });
 }
 
 /** Fisher–Yates over a copy; unbiased indices via crypto.randomInt. */
@@ -202,6 +249,16 @@ export class RoundOrchestrator {
     this.opts.submissions = store;
   }
 
+  /** Attach/replace the Phase-4 judgement store (wired late at the composition root). */
+  setResults(store: ResultsStore | undefined): void {
+    this.opts.results = store;
+  }
+
+  /** Attach/replace the LLM provider behind judgeRound (config-swappable, D-012). */
+  setLlm(llm: LLMProvider | undefined): void {
+    this.opts.llm = llm;
+  }
+
   serialize(code: string): OrchestratorPayload {
     const payload: OrchestratorPayload = { version: 1 };
     const category = this.categories.get(code);
@@ -220,6 +277,8 @@ export class RoundOrchestrator {
     if (results !== undefined) payload.results = results;
     if (revealIndex !== undefined) payload.revealIndex = revealIndex;
     if (leaderboard !== undefined) payload.leaderboard = [...leaderboard.values()];
+    const judgements = this.opts.results?.serialize(code);
+    if (judgements !== undefined) payload.judgements = judgements;
     return payload;
   }
 
@@ -238,6 +297,9 @@ export class RoundOrchestrator {
         new Map(payload.leaderboard.map((entry) => [entry.playerId, entry])),
       );
     }
+    // §6 judgement rows restore AFTER the cached board: the board is render
+    // state, the rows are source-of-truth and recompute-ready.
+    this.opts.results?.hydrate(payload.judgements);
   }
 
   // ── Runtime registry (fed by game-runtimes.ts) ──────────────────────────────
@@ -261,6 +323,9 @@ export class RoundOrchestrator {
     this.revealIndexes.delete(code);
     this.judging.delete(code);
     this.leaderboard.delete(code);
+    // Phase-4 symmetry with submissions.clearRoom: evicted rooms drop their
+    // durable judgement rows too.
+    this.opts.results?.clearRoom(code);
     this.stopQueueWatch(code);
     this.timers.disarm(`judge:${code}`);
   }
@@ -524,8 +589,8 @@ export class RoundOrchestrator {
   }
 
   /**
-   * The AI_JUDGING 20 s timeout delegates here (controller callback, TDD §8):
-   * run the configured judge (which owns deterministic fallback), then dispatch
+   * The AI_JUDGING 20 s deadline delegates here (controller callback, TDD §8):
+   * run judgeRound (which owns retries + deterministic fallback), then dispatch
    * JUDGEMENT_STORED so RESULTS/LEADERBOARD remain reachable on provider failure.
    */
   private async startJudging(code: string): Promise<void> {
@@ -534,30 +599,52 @@ export class RoundOrchestrator {
     const roundId = roundIdOf(code, fsm.roundIdx);
     if (this.judging.has(roundId) || this.results.has(code)) return;
     this.judging.add(roundId);
-    const entries = (this.opts.submissions?.list(roundId) ?? []).map((submission) => ({
-      playerId: submission.playerId,
-      track: submission.track,
-      chicken: submission.chicken,
-    }));
+    const entries = this.entriesFor(code, roundId);
     const scenario = this.scenarios.get(code) ?? 'the perfect song for this chaotic moment';
-    const judged =
-      this.opts.judge === undefined
-        ? fallbackJudge(scenario, entries)
-        : await this.opts.judge.judge(scenario, entries);
+    let judged: JudgedEntry[];
+    try {
+      judged = entriesToJudged(
+        entries,
+        await judgeRound({ scenario, songs: songsOf(entries) }, this.opts.llm),
+      );
+    } catch {
+      // judgeRound never throws by design; belt-and-braces for adapter bugs —
+      // the round still lands in RESULTS via the deterministic fallback.
+      judged = await this.fallbackJudgeEntries(scenario, entries);
+    }
     await this.storeJudgement(code, roundId, judged);
   }
 
+  /** 20 s failsafe: store the deterministic fallback ranking and advance. */
   private async finishWithFallback(code: string): Promise<void> {
     const fsm = this.fsms.get(code);
     if (fsm === undefined || fsm.state !== 'AI_JUDGING') return;
     const roundId = roundIdOf(code, fsm.roundIdx);
-    const entries = (this.opts.submissions?.list(roundId) ?? []).map((submission) => ({
+    const judged = await this.fallbackJudgeEntries(
+      this.scenarios.get(code) ?? '',
+      this.entriesFor(code, roundId),
+    );
+    await this.storeJudgement(code, roundId, judged);
+  }
+
+  /** Submission snapshot for one round, in the shape the judging layer consumes. */
+  private entriesFor(code: string, roundId: string): JudgeEntry[] {
+    return (this.opts.submissions?.list(roundId) ?? []).map((submission) => ({
       playerId: submission.playerId,
       track: submission.track,
       chicken: submission.chicken,
     }));
-    const judged = fallbackJudge(this.scenarios.get(code) ?? '', entries);
-    await this.storeJudgement(code, roundId, judged);
+  }
+
+  /** Deterministic hash fallback via judgeRound's no-provider path (one impl). */
+  private async fallbackJudgeEntries(
+    scenario: string,
+    entries: readonly JudgeEntry[],
+  ): Promise<JudgedEntry[]> {
+    return entriesToJudged(
+      entries,
+      await judgeRound({ scenario, songs: songsOf(entries) }, undefined),
+    );
   }
 
   private async storeJudgement(
@@ -570,6 +657,10 @@ export class RoundOrchestrator {
     const worstFirst = [...judged].sort((a, b) => b.rank - a.rank);
     this.results.set(code, worstFirst);
     this.revealIndexes.set(code, 0);
+    // §6 durability: raw judgement rows ride the checkpoint (idempotent — a
+    // retry after a crash between here and JUDGEMENT_STORED replaces the rows).
+    const roundIdx = Number(roundId.slice(code.length + 1));
+    this.opts.results?.record(code, roundIdx, judged);
     const room = this.opts.roomManager.get(code);
     let board = this.leaderboard.get(code);
     if (board === undefined) {
@@ -583,14 +674,38 @@ export class RoundOrchestrator {
         totalScore: 0,
         wins: 0,
       };
-      current.totalScore += result.score;
+      // Scoring currency is RANK POINTS (§6 leaderboard_entries): 1st=5,
+      // 2nd=3, 3rd=2, else 1. Judge scores are display-only.
+      current.totalScore += pointsForRank(result.rank);
       if (result.rank === 1) current.wins += 1;
       board.set(result.playerId, current);
     }
     this.judging.delete(roundId);
+    this.publishJudgement(code, judged);
     this.checkpoint(code);
     this.timers.disarm(`judge:${code}`);
     await this.dispatchQuietly(fsm, 'JUDGEMENT_STORED');
+  }
+
+  /**
+   * Round-verdict push (TDD §8/§9): one `judgement` frame to host + players
+   * once judging completes. Anonymity ends here by design — nicknames are
+   * joined server-side from the roster; clients never see pre-reveal owners.
+   */
+  private publishJudgement(code: string, judged: readonly JudgedEntry[]): void {
+    if (this.hub === undefined || judged.length === 0) return;
+    const room = this.opts.roomManager.get(code);
+    const results = [...judged]
+      .sort((a, b) => a.rank - b.rank)
+      .map((entry) => ({
+        rank: entry.rank,
+        score: entry.score,
+        title: entry.track.title,
+        artist: entry.track.artist,
+        explanation: entry.explanation,
+        nickname: room?.players.get(entry.playerId)?.nickname ?? 'Mystery DJ',
+      }));
+    this.hub.publish(code, { t: 'judgement', payload: { results } });
   }
 
   /** Illegal-transition races (host advanced meanwhile) are swallowed by design. */

@@ -15,6 +15,8 @@ import { apiRequest, HostApiError } from './api.js';
 import { errorText } from './errors.js';
 import { createHostRealtime } from './ws.js';
 import { RoundFlow } from './round/RoundFlow.js';
+import { Reveal } from './Reveal.js';
+import type { RevealEntry } from './Reveal.js';
 
 interface HostLobbyProps {
   room: { code: string; hostToken: string; playerId: string };
@@ -133,6 +135,24 @@ export const HostLobby = (props: HostLobbyProps) => {
     'GAME_OVER',
   ]);
   const inRoundFlow = () => ROUND_STATES.has(state());
+
+  /**
+   * RESULTS owns its full-screen choreography (host/Reveal.tsx, TDD §9) —
+   * mounted below instead of the RoundFlow step screen. Snapshot results map
+   * into the judgement-frame entry shape (owner → nickname); once the WS
+   * `judgement` frame payload is wired through, pass it as Reveal's `payload`
+   * to unlock the pre-final winner podium.
+   */
+  const revealEntries = (): RevealEntry[] =>
+    (snapshot()?.results ?? []).map((r) => ({
+      rank: r.rank,
+      score: r.score,
+      title: r.track.title,
+      artist: r.track.artist,
+      explanation: r.explanation,
+      nickname: r.owner,
+      chicken: r.chicken,
+    }));
 
   const joinUrl = `${location.origin}/player.html?code=${props.room.code}`;
 
@@ -297,9 +317,19 @@ export const HostLobby = (props: HostLobbyProps) => {
           </div>
         </Show>
 
-        {/* Phase-3 round flow: the step screen per FSM state. */}
+        {/* Phase-4 reveal choreography owns RESULTS (TDD §9). */}
+        <Show when={state() === 'RESULTS'}>
+          <Reveal
+            results={revealEntries()}
+            totalCount={snapshot()?.resultCount}
+            busy={actionBusy()}
+            onAdvance={(final) => void postHostAction('advance_reveal', { final })}
+          />
+        </Show>
+
+        {/* Phase-3 round flow: the step screen per FSM state (RESULTS excluded). */}
         <Show
-          when={inRoundFlow()}
+          when={inRoundFlow() && state() !== 'RESULTS'}
           fallback={
             <button
               type="button"

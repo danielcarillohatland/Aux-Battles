@@ -36,10 +36,10 @@ import type { MusicProvider } from './providers/music-provider.js';
 import { verifyToken } from './core/tokens.js';
 import { searchRoute } from './routes/search.js';
 import { SubmissionStore } from './core/submissions.js';
+import { ResultsStore } from './core/results.js';
 import { roundsRoute } from './routes/rounds.js';
 import { RoundOrchestrator } from './core/round-orchestrator.js';
-import { JudgeService } from './judge/judge-service.js';
-import { OpenRouterProvider } from './judge/openrouter-provider.js';
+import { OpenRouterProvider } from './judge/openrouter.js';
 
 /**
  * Bridge the two token seams (OAuth ↔ playback) without exposing room identity
@@ -111,6 +111,7 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
     wsHub.closeRoom(code, reason);
     orchestrator.forget(code);
     submissions.clearRoom(code);
+    results.clearRoom(code);
     roomManager.delete(code);
     store.delete(code);
     dropSpotifyTokens?.(code);
@@ -138,21 +139,19 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
   // orchestrator bind the FSMs to snapshots, playback mode (D-E) and the
   // validated batched judge + deterministic fallback.
   const submissions = new SubmissionStore();
-  const openRouterKey = env.OPENROUTER_API_KEY?.trim();
-  const judge = new JudgeService(
-    openRouterKey
-      ? new OpenRouterProvider(openRouterKey, env.OPENROUTER_MODEL ?? 'google/gemini-2.0-flash-001')
-      : undefined,
-    {
-      maxCalls: Number(env.AUX_LLM_MAX_CALLS ?? 1_000),
-    },
-  );
+  // Phase-4 results/leaderboard (TDD §6): judgements persist through the room
+  // checkpoint; standings join submissions → playerId and score by rank points.
+  const results = new ResultsStore(submissions);
+  // Judge vendor (D-012): config-swappable LLM behind judgeRound. No key →
+  // every round is judged by the deterministic hash fallback.
+  const llm = OpenRouterProvider.fromEnv(env);
   const orchestrator = new RoundOrchestrator({
     roomManager,
     wsHub,
     log: log.log,
     submissions,
-    judge,
+    results,
+    ...(llm !== null ? { llm } : {}),
   });
 
   // Phase-2 game runtime wiring (controller integration): FSM + timers +
@@ -309,6 +308,7 @@ export async function buildServer(env: NodeJS.ProcessEnv = process.env) {
     store,
     stopTtlSweeper,
     submissions,
+    results,
     orchestrator,
   };
 }

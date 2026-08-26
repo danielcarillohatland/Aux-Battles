@@ -122,6 +122,26 @@ export const SnapshotSchema = z.object({
 });
 export type Snapshot = z.infer<typeof SnapshotSchema>;
 
+// ── Phase 4: judgement payloads ───────────────────────────────────────────────
+
+/** One ranked entry of the round verdict, delivered by the WS `judgement` frame. */
+export const JudgementResultSchema = z.object({
+  rank: z.number().int().positive(),
+  score: z.number().int().min(0).max(100),
+  title: z.string().min(1).max(80),
+  artist: z.string().min(1).max(80),
+  explanation: z.string().max(280),
+  /** Owner nickname — anonymity ends here; this payload ships only post-judging. */
+  nickname: NicknameSchema,
+});
+export type JudgementResult = z.infer<typeof JudgementResultSchema>;
+
+/** Full round ranking, computed once by the judge and broadcast to hosts. */
+export const JudgementPayloadSchema = z.object({
+  results: z.array(JudgementResultSchema).min(1),
+});
+export type JudgementPayload = z.infer<typeof JudgementPayloadSchema>;
+
 // ── WebSocket frames ({t, ts, seq} envelope) ─────────────────────────────────
 
 const FrameBase = z.object({ ts: z.number().int(), seq: z.number().int() });
@@ -132,7 +152,8 @@ export const ServerFrameSchema = z.discriminatedUnion('t', [
   FrameBase.extend({ t: z.literal('timer_tick'), phaseEndsAt: z.number().nullable() }),
   FrameBase.extend({ t: z.literal('submission_received'), count: z.number().int() }),
   FrameBase.extend({ t: z.literal('playback_cue') }), // host-only; payload lands Phase 2.5
-  FrameBase.extend({ t: z.literal('judgement') }), // payload lands Phase 4
+  /** Judging complete → full verdict; payload present whenever a round was judged. */
+  FrameBase.extend({ t: z.literal('judgement'), payload: JudgementPayloadSchema.optional() }),
   FrameBase.extend({ t: z.literal('reveal_owner') }), // payload lands Phase 4
   FrameBase.extend({ t: z.literal('room_closed'), reason: z.string() }),
   FrameBase.extend({ t: z.literal('kicked'), reason: z.string() }),

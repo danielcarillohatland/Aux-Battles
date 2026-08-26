@@ -1,0 +1,347 @@
+/*
+ * AUX BATTLES — Reveal choreography styles (host screen, spec §5).
+ * Namespaced .rv-* to stay clear of host.css phase classes.
+ * Beat engine contract: each entrance runs var(--beat-dur, 520ms), then the
+ * component waits a fixed ≤600 ms before the next beat fires — so beats land
+ * ≈1.1–1.2 s apart with dead air never exceeding 600 ms (owner condition #10).
+ * Everything else here is either one-shot ≤600 ms or loops in place
+ * (drumroll ring, heartbeat ghosts) without gating input.
+ */
+
+.rv {
+  position: relative;
+  width: min(880px, 94vw);
+  margin-top: clamp(1rem, 3vh, 2rem);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: clamp(0.6rem, 2vh, 1.25rem);
+}
+
+/* Full-screen white flash on the winning beat. */
+.rv-flash {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  background: #fff;
+  animation: rv-flashout 420ms ease-out forwards;
+}
+@keyframes rv-flashout {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* ── Screen shake (last-place slam) ──────────────────────────────────────── */
+
+.rv.do-shake {
+  animation: rv-shake 500ms cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+@keyframes rv-shake {
+  10%,
+  90% {
+    transform: translateX(-2px);
+  }
+  20%,
+  80% {
+    transform: translateX(5px);
+  }
+  30%,
+  50%,
+  70% {
+    transform: translateX(-9px);
+  }
+  40%,
+  60% {
+    transform: translateX(9px);
+  }
+}
+
+/* ── Drumroll ─────────────────────────────────────────────────────────────── */
+
+.rv-drumroll {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(0.75rem, 2.5vh, 1.5rem);
+}
+.rv-drum-ring {
+  width: clamp(96px, 16vw, 180px);
+  height: clamp(96px, 16vw, 180px);
+  border-radius: 50%;
+  border: 4px solid rgb(255 47 180 / 0.5);
+  box-shadow:
+    0 0 24px rgb(255 47 180 / 0.35),
+    inset 0 0 24px rgb(124 58 237 / 0.3);
+  animation: rv-pulse 600ms ease-in-out infinite alternate;
+}
+@keyframes rv-pulse {
+  from {
+    transform: scale(0.94);
+    opacity: 0.7;
+  }
+  to {
+    transform: scale(1.06);
+    opacity: 1;
+  }
+}
+
+.rv-progress {
+  margin: 0;
+  color: #9b9bb4;
+  font-size: clamp(0.75rem, 1.4vw, 0.95rem);
+  letter-spacing: 0.06em;
+}
+
+/* ── Result card per tier ─────────────────────────────────────────────────── */
+
+.rv-card {
+  position: relative;
+  width: min(620px, 92vw);
+  padding: clamp(1.25rem, 4vw, 2.25rem);
+  border-radius: 24px;
+  background: rgb(255 255 255 / 0.05);
+  border: 2px solid rgb(255 255 255 / 0.14);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  animation: rv-slam var(--beat-dur, 520ms) cubic-bezier(0.2, 0.9, 0.2, 1.25);
+}
+@keyframes rv-slam {
+  from {
+    opacity: 0;
+    transform: translateY(3rem) scale(0.82);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.rv-tier-slam {
+  border-color: #ff2f6b;
+  box-shadow: 0 0 3rem rgb(255 47 107 / 0.45);
+}
+.rv-tier-mid {
+  border-color: rgb(255 218 87 / 0.55);
+}
+.rv-tier-top {
+  border-color: #ffda57;
+  box-shadow: 0 0 3rem rgb(255 218 87 / 0.4);
+}
+/* Winner podium card. */
+.rv-tier-winner {
+  width: min(700px, 94vw);
+  padding-block: clamp(2rem, 6vw, 3.5rem);
+  border-color: #ffda57;
+  background:
+    radial-gradient(ellipse at top, rgb(255 218 87 / 0.18), transparent 65%),
+    rgb(255 255 255 / 0.07);
+  box-shadow: 0 0 5rem rgb(255 218 87 / 0.55);
+  animation-duration: 380ms;
+}
+
+.rv-rank {
+  margin: 0;
+  font-size: clamp(1rem, 2.4vw, 1.6rem);
+  font-weight: 900;
+  letter-spacing: 0.2em;
+  color: #ffda57;
+}
+.rv-title {
+  margin: 0;
+  font-size: clamp(1.7rem, 5vw, 3.2rem);
+  font-weight: 900;
+  line-height: 1.1;
+}
+.rv-tier-winner .rv-title,
+.rv-tier-top .rv-title {
+  font-size: clamp(2rem, 6.5vw, 4.2rem);
+  background: linear-gradient(100deg, #ff2fb4, #7c3aed);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.rv-artist {
+  margin: 0;
+  color: #9b9bb4;
+  font-size: clamp(1rem, 2.2vw, 1.4rem);
+}
+.rv-score {
+  font-size: clamp(1.4rem, 3.4vw, 2.4rem);
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+.rv-owner {
+  margin: 0.25rem 0 0;
+  color: #e8e8f2;
+  font-size: clamp(1.2rem, 2.8vw, 2rem);
+  letter-spacing: 0.04em;
+}
+/* Explanation: text-only, below the card facts (no HTML sink). */
+.rv-explanation {
+  margin: 0.5rem 0 0;
+  max-width: 46ch;
+  color: #b9b9cf;
+  font-size: clamp(0.95rem, 1.8vw, 1.15rem);
+  line-height: 1.45;
+  font-style: italic;
+}
+
+.rv-crown {
+  position: absolute;
+  top: -1.2em;
+  margin: 0;
+  font-size: clamp(3.5rem, 10vw, 7rem);
+  filter: drop-shadow(0 0 18px rgb(255 218 87 / 0.7));
+  animation: rv-crown-drop 500ms cubic-bezier(0.2, 0.9, 0.2, 1.25);
+}
+@keyframes rv-crown-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-40vh) rotate(-14deg);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Waiting on a lagging server reveal (snapshot fallback). */
+.rv-pending {
+  min-height: 8rem;
+  place-content: center;
+  font-size: 3rem;
+  animation: rv-pulse 450ms ease-in-out infinite alternate;
+}
+
+/* ── TOP-2 freeze: blurred ghosts + heartbeat ────────────────────────────── */
+
+.rv-freeze .rv-card {
+  backdrop-filter: blur(1.5px);
+}
+.rv-ghosts {
+  display: flex;
+  gap: clamp(0.75rem, 3vw, 2rem);
+  justify-content: center;
+}
+.rv-ghost {
+  width: clamp(64px, 10vw, 110px);
+  height: clamp(84px, 13vw, 140px);
+  display: grid;
+  place-items: center;
+  border-radius: 18px;
+  border: 1px solid rgb(255 218 87 / 0.4);
+  background: rgb(255 218 87 / 0.07);
+  color: rgb(255 218 87 / 0.55);
+  font-size: clamp(1.6rem, 4vw, 2.6rem);
+  font-weight: 900;
+  filter: blur(3px);
+  animation: rv-heartbeat 600ms ease-in-out infinite;
+}
+@keyframes rv-heartbeat {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  30% {
+    transform: scale(1.08);
+  }
+  60% {
+    transform: scale(0.98);
+  }
+}
+
+/* ── CSS-only confetti: three bursts ×14 pieces ───────────────────────────── */
+
+.rv-confetti {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  overflow: hidden;
+}
+.rv-burst span {
+  position: absolute;
+  top: -6vh;
+  left: var(--cx, 50vw);
+  width: 12px;
+  height: 20px;
+  border-radius: 3px;
+  background: var(--cc, #ffda57);
+  rotate: var(--cr, 0deg);
+  opacity: 0;
+  animation: rv-fall 1600ms var(--cd, 0ms) cubic-bezier(0.15, 0.4, 0.6, 1) forwards;
+}
+@keyframes rv-fall {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0.9;
+    transform: translateY(115vh);
+  }
+}
+
+/* ── Reduced-motion fallback list ─────────────────────────────────────────── */
+
+.rv-list {
+  display: grid;
+  gap: 0.75rem;
+  width: min(680px, 92vw);
+}
+.rv-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  gap: 0.4rem 1rem;
+  align-items: baseline;
+  padding: 0.85rem 1.1rem;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 0.05);
+  border: 1px solid rgb(255 255 255 / 0.12);
+  text-align: left;
+}
+.rv-row[data-rank='1'] {
+  border-color: #ffda57;
+}
+.rv-row-rank {
+  font-weight: 900;
+  color: #ffda57;
+}
+.rv-row-who {
+  font-weight: 800;
+}
+.rv-row-what {
+  color: #b9b9cf;
+}
+.rv-row-score {
+  font-variant-numeric: tabular-nums;
+}
+.rv-row-why {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #9b9bb4;
+  font-style: italic;
+  font-size: 0.95rem;
+}
+
+/* Reduced motion: kill theatrics globally for this component. */
+@media (prefers-reduced-motion: reduce) {
+  .rv *,
+  .rv-flash,
+  .rv-confetti span {
+    animation: none !important;
+    backdrop-filter: none !important;
+    transition: none !important;
+  }
+  .rv-confetti {
+    display: none;
+  }
+}
