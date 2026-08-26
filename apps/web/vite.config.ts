@@ -8,7 +8,12 @@ export default defineConfig({
   plugins: [solid()],
   server: {
     proxy: {
+      // REST mutations go through Vite in dev…
       '/api': 'http://localhost:8787',
+      // …and so must the WS upgrade — without this, the host client dials
+      // Vite for /ws and loops forever on "Reconnecting…" (ticket mints fine
+      // via /api proxy, but the upgrade never reaches Fastify).
+      '/ws': { target: 'ws://localhost:8787', ws: true },
     },
   },
   build: {

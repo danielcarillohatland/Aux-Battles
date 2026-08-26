@@ -12,6 +12,7 @@ import { createSignal, createEffect, onCleanup, onMount, For, Show } from 'solid
 import QRCode from 'qrcode';
 import type { Snapshot } from '@aux/shared';
 import { apiRequest, HostApiError } from './api.js';
+import { buildJoinUrl, resolveJoinOrigin } from './join-url.js';
 import { errorText } from './errors.js';
 import { createHostRealtime } from './ws.js';
 import { RoundFlow } from './round/RoundFlow.js';
@@ -154,7 +155,20 @@ export const HostLobby = (props: HostLobbyProps) => {
       chicken: r.chicken,
     }));
 
-  const joinUrl = `${location.origin}/player.html?code=${props.room.code}`;
+  // LAN QR fix (TDD §1): phones resolve 127.0.0.1/localhost as themselves, so
+  // the join URL must use a LAN-reachable origin. On loopback the host types
+  // it once (persisted); on a LAN IP or deployed domain it's automatic.
+  const [joinOriginOverride, setJoinOriginOverride] = createSignal(
+    localStorage.getItem('aux:joinOrigin') ?? '',
+  );
+  const resolvedJoinOrigin = () => resolveJoinOrigin(joinOriginOverride() || null) ?? '';
+  const joinUrl = buildJoinUrl(props.room.code, resolvedJoinOrigin() || undefined);
+  const saveJoinOrigin = (origin: string) => {
+    const clean = origin.trim().replace(/\/$/, '');
+    setJoinOriginOverride(clean);
+    if (clean === '') localStorage.removeItem('aux:joinOrigin');
+    else localStorage.setItem('aux:joinOrigin', clean);
+  };
 
   /** LOBBY → CATEGORY (POST /host/start-game). */
   const startGame = async () => {
@@ -264,7 +278,36 @@ export const HostLobby = (props: HostLobbyProps) => {
 
         <div class="qr-panel">
           <canvas ref={canvasRef} aria-label={`QR code joining ${joinUrl}`} />
-          <p class="join-url">{joinUrl}</p>
+          <Show
+            when={resolvedJoinOrigin() !== ''}
+            fallback={
+              <div class="join-origin-hint">
+                <p>⚠ Phones can't reach 127.0.0.1 — enter this Mac's Wi-Fi IP once:</p>
+                <form
+                  style="display:flex;gap:.4rem"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const input =
+                      (e.currentTarget.querySelector('input') as HTMLInputElement | null) ?? null;
+                    if (input !== null) saveJoinOrigin(input.value);
+                  }}
+                >
+                  <input
+                    placeholder="e.g. http://192.168.0.122:8787"
+                    value={joinOriginOverride()}
+                    onInput={(e) => saveJoinOrigin(e.currentTarget.value)}
+                    aria-label="LAN origin for player join URLs"
+                  />
+                </form>
+                <p class="hint-fine">
+                  Find it in System Settings → Wi-Fi → Details → TCP/IP. Or open the host page via
+                  the LAN IP instead of localhost and the QR fixes itself.
+                </p>
+              </div>
+            }
+          >
+            <p class="join-url">{joinUrl}</p>
+          </Show>
         </div>
 
         <Show when={spotifyAvailable()}>
