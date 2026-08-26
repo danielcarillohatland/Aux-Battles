@@ -59,11 +59,11 @@
 - [x] Reveal choreography (host-paced worst→best, owner reveal, reduced-motion fallback)
 - [x] Winner screen + next-round loop
 
-## Phase 5 — Polish & deploy
+## Phase 5 — Polish & deploy *(code complete — deploy + playtest await owner)*
 - [x] Local capacity gate: 50 rooms × 8 players, 450 requests, 0 failures, p95 49 ms
 - [ ] k6 soak gate + 500×8 headroom variant (script ready; requires k6 runtime)
 - [ ] Fly.io deploy (image/config/volume wiring ready; requires owner Fly app + secrets)
-- [ ] Structured playtest #1 executed, findings logged in PLAYTEST.md
+- [ ] Structured playtest #1 — BLOCKED ON OWNER (needs humans!): scripts/playtest-checklist.sh ready
 - [ ] Reveal timing polish from playtest data
 - [ ] Definition-of-success checklist walked end-to-end on real devices
 
