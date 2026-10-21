@@ -8,19 +8,17 @@
 
 | ID | Priority | Task | Owner | Blocker | Complexity |
 |----|----------|------|-------|---------|------------|
-| AUX-001 | P1 | Spotify day-one probe script (preview_url, transfer latency, rate ceiling) | Backend agent | Needs owner's Spotify Dev Mode app credentials + Premium account for live test | M |
 | AUX-002 | P2 | Choose production LLM vendor key (OpenRouter default) | Owner | Free-tier key sufficient for Phase 0–3 (FakeLLM used in CI) | S |
 | AUX-003 | P2 | Fly.io app creation + secrets wiring (deploy happens Phase 5) | Owner | Account exists; defer until Phase 5 unless earlier smoke wanted | S |
 | AUX-004 | P3 | Host-migration UX copy voice pass | Product owner | Copy drafted; needs owner tone approval | S |
-| AUX-005 | P3 | NdjsonAnalyticsSink.flush(): end-with-drain-callback so fast SIGTERM cannot drop buffered lines (W6 finding #4, non-blocking MVP) | Server agent | None | S |
-
-| AUX-006 | P1 | WS hub default snapshot hardcodes LOBBY/hasSubmitted:false — must be replaced by FSM-backed builder now that runtimes are wired | Server agent | None — seam exists (setSnapshotBuilder) | M |
 
 ## Resolved
 
-| ID | Resolution |
-|----|-----------|
-| — | none yet |
+| ID | Resolution | Date |
+|----|------------|------|
+| AUX-001 | Spotify catalog + live Premium/device probes P1–P8 pass; no design blocker | 2026-08-25 |
+| AUX-005 | Analytics flush now awaits stream end/drain during Fastify shutdown | 2026-08-25 |
+| AUX-006 | WS snapshots are FSM/orchestrator-backed, per-viewer, and restart-durable | 2026-08-25 |
 
 ## Rules
 1. Code TODOs MUST reference an ID here (`TODO(AUX-XXX)`), never bare `TODO`.

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AUX BATTLES video relay</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+        overflow: hidden;
+      }
+      iframe {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      // YouTube relay (D-031). The game page embeds THIS page from the game's
+      // own https domain and talks to it with postMessage, so the YouTube
+      // player's parent is always a real http(s) hostname — even when the game
+      // runs from a native app shell (capacitor://localhost) or a LAN address.
+      // The relay never interprets anything from YouTube as commands, and it
+      // only accepts commands from its own parent window.
+      (function () {
+        var TAG = 'aux-yt-relay';
+        var q = new URLSearchParams(location.search);
+        var videoId = q.get('v') || '';
+        var start = Math.max(0, parseInt(q.get('start') || '0', 10) || 0);
+        var parentWindow = window.parent;
+        var player = null;
+        var ticker = null;
+
+        function send(message) {
+          message.aux = TAG;
+          // '*' because native shells use non-http origins that postMessage
+          // cannot name; the parent verifies the source window instead.
+          parentWindow.postMessage(message, '*');
+        }
+        if (!/^[A-Za-z0-9_-]{11}$/.test(videoId) || parentWindow === window) {
+          send({ type: 'error', code: 2 });
+          return;
+        }
+        var params = new URLSearchParams({
+          enablejsapi: '1',
+          origin: location.origin,
+          autoplay: '1',
+          playsinline: '1',
+          rel: '0',
+          start: String(start),
+        });
+        var frame = document.createElement('iframe');
+        frame.src = 'https://www.youtube.com/embed/' + videoId + '?' + params.toString();
+        frame.setAttribute(
+          'allow',
+          'autoplay; encrypted-media; picture-in-picture; accelerometer; gyroscope',
+        );
+        frame.setAttribute('allowfullscreen', '');
+        frame.referrerPolicy = 'strict-origin-when-cross-origin';
+        frame.title = 'YouTube video player';
+        document.body.appendChild(frame);
+
+        function stopTicker() {
+          if (ticker) {
+            clearInterval(ticker);
+            ticker = null;
+          }
+        }
+        window.onYouTubeIframeAPIReady = function () {
+          player = new YT.Player(frame, {
+            events: {
+              onReady: function (e) {
+                e.target.seekTo(start, true);
+                e.target.playVideo();
+                send({ type: 'ready' });
+              },
+              onStateChange: function (e) {
+                send({ type: 'state', state: e.data });
+                stopTicker();
+                if (e.data === YT.PlayerState.PLAYING) {
+                  ticker = setInterval(function () {
+                    try {
+                      send({ type: 'time', current: player.getCurrentTime() });
+                    } catch (err) {
+                      /* player gone */
+                    }
+                  }, 200);
+                }
+              },
+              onError: function (e) {
+                stopTicker();
+                send({ type: 'error', code: Number(e.data) });
+              },
+            },
+          });
+        };
+        window.addEventListener('message', function (event) {
+          if (event.source !== parentWindow) return;
+          var data = event.data;
+          if (!data || data.aux !== TAG || !player) return;
+          try {
+            if (data.cmd === 'play') player.playVideo();
+            else if (data.cmd === 'pause') player.pauseVideo();
+            else if (data.cmd === 'seek') player.seekTo(Number(data.seconds) || 0, true);
+            else if (data.cmd === 'stop') {
+              stopTicker();
+              player.stopVideo();
+            }
+          } catch (err) {
+            /* player not ready */
+          }
+        });
+        var api = document.createElement('script');
+        api.src = 'https://www.youtube.com/iframe_api';
+        api.onerror = function () {
+          send({ type: 'error', code: 5 });
+        };
+        document.head.appendChild(api);
+      })();
+    </script>
+  </body>
+</html>

@@ -10,12 +10,13 @@ import { createPlayerRealtime } from '../src/player/ws.js';
 const CODE = 'ABCDE';
 
 const TRACK_A = {
-  id: 'spotify:track:aaa',
-  title: 'Fast Car',
-  artist: 'Tracy Chapman',
-  album: null,
-  durationMs: 297000,
-  artUrl: null,
+  id: 'original:midnight-pancakes',
+  title: 'Midnight Pancakes',
+  artist: 'AUX House Band',
+  album: 'AUX Originals · Volume One',
+  durationMs: 32000,
+  source: 'original',
+  description: 'Playful funk-pop with late-night mischief.',
 };
 const TRACK_B = { id: 't2', title: 'Song B', artist: 'B' };
 
@@ -50,13 +51,13 @@ function stubFetch(handler: (url: string, init?: RequestInit) => Response | Prom
 describe('searchTracks', () => {
   it('reports unavailable on 404 (endpoint not deployed yet)', async () => {
     stubFetch(() => jsonResponse(404, { ok: false }));
-    const outcome = await searchTracks('fast car');
+    const outcome = await searchTracks('midnight pancakes');
     expect(outcome).toEqual({ status: 'unavailable' });
-    expect(fetchCalls[0]?.url).toBe('/api/v1/search?q=fast%20car&limit=10');
+    expect(fetchCalls[0]?.url).toBe('/api/v1/search?q=midnight%20pancakes&limit=20');
   });
 
-  it('parses the ok envelope and caps results at 10', async () => {
-    const many = Array.from({ length: 14 }, (_, i) => ({
+  it('parses the ok envelope and caps results at 20', async () => {
+    const many = Array.from({ length: 24 }, (_, i) => ({
       id: `id-${i}`,
       title: `T${i}`,
       artist: 'A',
@@ -64,7 +65,7 @@ describe('searchTracks', () => {
     stubFetch(() => jsonResponse(200, { ok: true, data: { tracks: many } }));
     const outcome = await searchTracks('x');
     expect(outcome.status).toBe('ok');
-    if (outcome.status === 'ok') expect(outcome.tracks.length).toBe(10);
+    if (outcome.status === 'ok') expect(outcome.tracks.length).toBe(20);
   });
 
   it('tolerates backend-spec field names (trackId/albumArt) and dedupes', async () => {
@@ -73,8 +74,48 @@ describe('searchTracks', () => {
     );
     const outcome = await searchTracks('q');
     expect(outcome.status).toBe('ok');
-    if (outcome.status === 'ok')
+    if (outcome.status === 'ok') {
       expect(outcome.tracks.map((t) => t.id)).toEqual([TRACK_A.id, TRACK_B.id]);
+      expect(outcome.tracks[0]).toMatchObject({
+        source: 'original',
+        description: TRACK_A.description,
+      });
+    }
+  });
+
+  it('collapses duplicate clean/remastered variants of the same title and artist', async () => {
+    stubFetch(() =>
+      jsonResponse(200, {
+        ok: true,
+        data: {
+          tracks: [
+            { id: 'original:one', title: 'Confetti Forecast', artist: 'AUX House Band' },
+            {
+              id: 'original:duplicate',
+              title: 'Confetti Forecast (Remastered 2024)',
+              artist: 'AUX House Band',
+            },
+          ],
+        },
+      }),
+    );
+    const outcome = await searchTracks('confetti forecast');
+    expect(outcome.status).toBe('ok');
+    if (outcome.status === 'ok')
+      expect(outcome.tracks.map((track) => track.id)).toEqual(['original:one']);
+  });
+
+  it('never exposes raw provider or HTTP errors to players', async () => {
+    stubFetch(() =>
+      jsonResponse(502, {
+        ok: false,
+        error: { code: 'INTERNAL', message: 'approved music catalog unavailable' },
+      }),
+    );
+    expect(await searchTracks('party')).toEqual({
+      status: 'error',
+      message: 'Music search is unavailable right now — try again.',
+    });
   });
 
   it('maps network failure to an error outcome', async () => {
@@ -169,7 +210,7 @@ function snap(submissionsCount: number) {
       state: 'SONG_SELECTION',
       roundIdx: 0,
       phaseEndsAt: null,
-      playbackMode: 'api',
+      playbackMode: 'catalog',
       players: [{ nickname: 'a', connected: true }],
       submissionsCount,
       you: { role: 'player', hasSubmitted: false, nickname: 'a' },

@@ -11,17 +11,28 @@
     "node": ">=22"
   },
   "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:clean": "node scripts/dev-clean.mjs",
     "typecheck": "tsc -b packages/shared apps/server apps/web",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
     "build": "npm run build --workspaces --if-present",
+    "build:mobile": "npm run build -w @aux/shared && npm run build -w @aux/web -- --mode mobile",
+    "mobile:sync": "npm run build:mobile && AUX_NATIVE_BUILD=1 cap sync",
+    "mobile:ios": "npm run ios:prepare && cap open ios",
+    "mobile:android": "npm run mobile:sync && cap open android",
     "dev:server": "npm run dev -w @aux/server",
     "dev:web": "npm run dev -w @aux/web",
-    "gate": "npm run typecheck && npm run lint && npm run format:check && npm run test"
+    "gate": "npm run typecheck && npm run lint && npm run format:check && npm run test",
+    "judge:eval": "tsx scripts/judge-eval.ts",
+    "ios:check": "node scripts/ios-release.mjs check",
+    "ios:prepare": "node scripts/ios-release.mjs prepare",
+    "ios:compile-check": "node scripts/ios-release.mjs compile-check"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
     "@types/node": "^24.3.0",
     "eslint": "^9.34.0",
     "eslint-config-prettier": "^10.1.8",
@@ -33,5 +44,10 @@
   "allowScripts": {
     "esbuild@0.28.2": true,
     "better-sqlite3@12.11.1": true
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/ios": "^8.5.0"
   }
 }

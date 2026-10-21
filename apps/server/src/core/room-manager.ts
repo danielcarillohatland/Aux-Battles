@@ -26,6 +26,18 @@ export interface Room {
   hostPlayerId: string;
   players: Map<string, RoomPlayer>;
   createdAt: number;
+  /** Private billing identity. Never included in a public room snapshot. */
+  billingAccountId?: string;
+  /** The free AI allowance was used up when this game started; the room votes instead. */
+  aiOffDuty?: boolean;
+}
+
+export interface SerializedRoom {
+  hostPlayerId: string;
+  players: Array<[string, RoomPlayer]>;
+  createdAt: number;
+  billingAccountId?: string;
+  aiOffDuty?: boolean;
 }
 
 export interface CreateRoomResult {
@@ -44,6 +56,7 @@ export interface SnapshotData {
   roomCode: string;
   players: Array<{ nickname: string; connected: boolean }>;
   hostNickname: string | null;
+  judgingMode: 'ai' | 'crowd';
 }
 
 export class RoomNotFoundError extends Error {
@@ -61,8 +74,27 @@ export class NameTakenError extends Error {
   }
 }
 
+export class JoinClosedError extends Error {
+  constructor() {
+    super('joining is closed for this phase');
+    this.name = 'JoinClosedError';
+  }
+}
+
 export class RoomManager {
   private readonly rooms = new Map<string, Room>();
+  onChanged: ((code: string) => void) | null = null;
+  canJoin: ((code: string) => boolean) | null = null;
+  /** True while the room has no game state a returning player could lose (LOBBY). */
+  isLobby: ((code: string) => boolean) | null = null;
+
+  private fire(code: string): void {
+    try {
+      this.onChanged?.(code);
+    } catch {
+      // Persistence failure never invalidates an already accepted mutation.
+    }
+  }
 
   /**
    * Random code from ROOM_ALPHABET × ROOM_CODE_LENGTH (D-A: 31^5 ≈ 28.6M).
@@ -79,7 +111,7 @@ export class RoomManager {
     }
   }
 
-  createRoom(now: number = Date.now()): CreateRoomResult {
+  createRoom(now: number = Date.now(), billingAccountId?: string): CreateRoomResult {
     const code = this.generateCode();
     const playerId = randomUUID();
     const hostToken = mintToken();
@@ -97,13 +129,19 @@ export class RoomManager {
         ],
       ]),
       createdAt: now,
+      ...(billingAccountId ? { billingAccountId } : {}),
     };
     this.rooms.set(code, room);
+    this.fire(code);
     return { code, hostToken, playerId };
   }
 
   get(code: string): Room | undefined {
     return this.rooms.get(code);
+  }
+
+  entries(): Array<[string, Room]> {
+    return [...this.rooms.entries()];
   }
 
   /**
@@ -124,10 +162,15 @@ export class RoomManager {
   joinRoom(code: string, nickname: string, now: number = Date.now()): JoinRoomResult {
     const room = this.rooms.get(code);
     if (!room) throw new RoomNotFoundError();
+    if (this.canJoin !== null && !this.canJoin(code)) throw new JoinClosedError();
 
     const candidate = nickname.toLowerCase();
-    for (const p of room.players.values()) {
-      if (p.connected && p.nickname.toLowerCase() === candidate) throw new NameTakenError();
+    for (const [id, p] of room.players) {
+      if (p.nickname.toLowerCase() !== candidate) continue;
+      if (p.connected) throw new NameTakenError();
+      // A phone that lost its token rejoins under the same name. In the lobby
+      // nothing is at stake, so drop the ghost instead of letting it fill seats.
+      if (id !== room.hostPlayerId && this.isLobby?.(code) === true) room.players.delete(id);
     }
 
     const playerId = randomUUID();
@@ -138,7 +181,43 @@ export class RoomManager {
       connected: true,
       joinedAt: now,
     });
+    this.fire(code);
     return { playerToken, playerId, nickname };
+  }
+
+  serialize(code: string): SerializedRoom | null {
+    const room = this.rooms.get(code);
+    if (room === undefined) return null;
+    return {
+      hostPlayerId: room.hostPlayerId,
+      players: [...room.players.entries()].map(([id, player]) => [id, { ...player }]),
+      createdAt: room.createdAt,
+      ...(room.billingAccountId ? { billingAccountId: room.billingAccountId } : {}),
+      ...(room.aiOffDuty ? { aiOffDuty: true } : {}),
+    };
+  }
+
+  hydrate(code: string, payload: SerializedRoom): void {
+    if (this.rooms.has(code)) return;
+    this.rooms.set(code, {
+      hostPlayerId: payload.hostPlayerId,
+      // Sockets do not survive a restart; players count as connected again
+      // only after they redial (otherwise quorum and empty-room expiry stall).
+      players: new Map(
+        payload.players.map(([id, player]) => [id, { ...player, connected: false }]),
+      ),
+      createdAt: payload.createdAt,
+      ...(payload.billingAccountId ? { billingAccountId: payload.billingAccountId } : {}),
+      ...(payload.aiOffDuty ? { aiOffDuty: true } : {}),
+    });
+  }
+
+  markChanged(code: string): void {
+    if (this.rooms.has(code)) this.fire(code);
+  }
+
+  delete(code: string): boolean {
+    return this.rooms.delete(code);
   }
 
   snapshot(code: string): SnapshotData {
@@ -146,11 +225,11 @@ export class RoomManager {
     if (!room) throw new RoomNotFoundError();
     return {
       roomCode: code,
-      players: [...room.players.values()].map((p) => ({
-        nickname: p.nickname,
-        connected: p.connected,
-      })),
+      players: [...room.players.entries()]
+        .filter(([id]) => id !== room.hostPlayerId)
+        .map(([, p]) => ({ nickname: p.nickname, connected: p.connected })),
       hostNickname: room.players.get(room.hostPlayerId)?.nickname ?? null,
+      judgingMode: room.billingAccountId ? 'ai' : 'crowd',
     };
   }
 }

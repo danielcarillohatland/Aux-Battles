@@ -22,9 +22,10 @@
  *     keep retrying WS quietly in the background.
  */
 import { createSignal } from 'solid-js';
-import { HEARTBEAT_INTERVAL_MS, ServerFrameSchema } from '@aux/shared';
+import { HEARTBEAT_INTERVAL_MS, ServerFrameSchema, SnapshotSchema } from '@aux/shared';
 import type { ServerFrame, Snapshot } from '@aux/shared';
 import { apiRequest, HostApiError } from './api.js';
+import { webSocketUrl } from '../config/endpoints.js';
 
 // ── Tunables ──────────────────────────────────────────────────────────────────
 
@@ -52,6 +53,8 @@ export interface RealtimeHandle {
   /** Full server state, replaced wholesale on every state_change. */
   readonly snapshot: () => Snapshot | null;
   readonly connState: () => ConnState;
+  /** Live picks count for the current round (see submission_received). */
+  readonly submissionCount: () => number | null;
   /**
    * Seconds remaining in the current phase, computed LOCALLY from the absolute
    * `phaseEndsAt` deadline (D-C). Null when the phase isn't timed or time is up.
@@ -59,24 +62,32 @@ export interface RealtimeHandle {
   readonly countdownSeconds: () => number | null;
   /** True once the socket has proven itself (first frame received). */
   readonly everLive: () => boolean;
+  /** Development-only detail for the latest socket error/close. */
+  readonly connectionIssue: () => string | null;
   stop: () => void;
 }
 
 interface RealtimeOptions {
   code: string;
   hostToken: string;
+  /** Ticket already minted while validating a restored host session. */
+  initialTicket?: string | undefined;
   /** Room vanished while we were in polling fallback (WS would send room_closed). */
   onRoomGone?: () => void;
   onTerminal?: (event: TerminalEvent) => void;
+  onFatal?: (reason: string) => void;
 }
 
 // ── Engine ────────────────────────────────────────────────────────────────────
 
 export function createHostRealtime(opts: RealtimeOptions): RealtimeHandle {
   const [snapshot, setSnapshot] = createSignal<Snapshot | null>(null);
+  /** Live picks count: seeded from snapshots, nudged by count-only frames between them. */
+  const [submissionCount, setSubmissionCount] = createSignal<number | null>(null);
   const [connState, setConnState] = createSignal<ConnState>('connecting');
   const [countdownSeconds, setCountdownSeconds] = createSignal<number | null>(null);
   const [everLive, setEverLive] = createSignal(false);
+  const [connectionIssue, setConnectionIssue] = createSignal<string | null>(null);
 
   let ws: WebSocket | null = null;
   let stopped = false;
@@ -88,6 +99,7 @@ export function createHostRealtime(opts: RealtimeOptions): RealtimeHandle {
   let watchdogTimer: ReturnType<typeof setInterval> | undefined;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let countdownTimer: ReturnType<typeof setInterval> | undefined;
+  let initialTicket = opts.initialTicket;
 
   // ── Countdown (local, from absolute deadline — D-C) ────────────────────────
 
@@ -116,12 +128,16 @@ export function createHostRealtime(opts: RealtimeOptions): RealtimeHandle {
         { headers: { authorization: `Bearer ${opts.hostToken}` } },
       );
       if (stopped) return;
-      applySnapshot(snap);
+      const parsed = SnapshotSchema.safeParse(snap);
+      if (parsed.success) applySnapshot(parsed.data);
     } catch (err) {
       if (
         err instanceof HostApiError &&
-        (err.code === 'ROOM_NOT_FOUND' || err.code === 'ROOM_CLOSED')
+        (err.code === 'NOT_AUTHENTICATED' ||
+          err.code === 'ROOM_NOT_FOUND' ||
+          err.code === 'ROOM_CLOSED')
       ) {
+        terminate(null, 'Host session is no longer valid.');
         opts.onRoomGone?.();
       }
       /* other errors are transient — next poll retries */
@@ -148,6 +164,7 @@ export function createHostRealtime(opts: RealtimeOptions): RealtimeHandle {
 
   const applySnapshot = (snap: Snapshot) => {
     setSnapshot(snap); // whole-object swap; consumers re-derive everything
+    setSubmissionCount(snap.submissionsCount);
     startCountdown();
   };
 
@@ -156,26 +173,31 @@ export function createHostRealtime(opts: RealtimeOptions): RealtimeHandle {
     if (!ServerFrameSchema.safeParse(raw).success) return; // unknown/malformed: ignore
     const frame = raw as ServerFrame;
 
+    // Sequence numbers cover every room frame, not only snapshots. Recording
+    // informational frames prevents a valid judgement/submission followed by
+    // state_change from looking like packet loss and causing a needless redial.
+    if (lastSeq !== null && frame.seq > lastSeq + 1) {
+      resync();
+      return;
+    }
+    if (lastSeq !== null && frame.seq <= lastSeq) return;
+    lastSeq = frame.seq;
+
     switch (frame.t) {
       case 'state_change': {
-        // Gap detection (D-D): seq is per-room monotonic; a jump means frames
-        // were lost. Repair by fresh handshake — its first state_change resyncs.
-        if (lastSeq !== null && frame.seq > lastSeq + 1) {
-          resync();
-          return;
-        }
-        lastSeq = frame.seq;
         applySnapshot(frame.snapshot);
         return;
       }
       case 'timer_tick':
         return; // deliberately ignored — countdown derives from phaseEndsAt (D-C)
       case 'submission_received':
-        return; // informational only; authoritative count arrives via state_change
+        // Count-only frame (anonymity): tick the host's progress between snapshots.
+        setSubmissionCount(frame.count);
+        return;
       case 'playback_cue':
       case 'judgement':
       case 'reveal_owner':
-        return; // Phase 2.5 / Phase 4 payloads land later
+        return; // authoritative playback/reveal state arrives in snapshots
       case 'room_closed':
       case 'kicked':
         terminate(frame.t, frame.reason);
@@ -211,30 +233,51 @@ export function createHostRealtime(opts: RealtimeOptions): RealtimeHandle {
 
     // Connect-ticket flow: short-lived one-time ticket keeps the long-lived
     // session token out of upgrade URLs/logs. Endpoint owned by backend (§9).
-    let ticket: string;
-    try {
-      const data = await apiRequest<{ ticket: string }>('/api/v1/ws-ticket', {
-        method: 'POST',
-        headers: { authorization: `Bearer ${opts.hostToken}` },
-        body: JSON.stringify({ code: opts.code }),
-      });
-      ticket = data.ticket;
-    } catch {
-      return onHandshakeFailed();
+    let ticket = initialTicket;
+    initialTicket = undefined;
+    if (ticket === undefined) {
+      try {
+        const data = await apiRequest<{ ticket: string }>('/api/v1/ws-ticket', {
+          method: 'POST',
+          headers: { authorization: `Bearer ${opts.hostToken}` },
+          body: JSON.stringify({ code: opts.code }),
+        });
+        ticket = data.ticket;
+      } catch (err) {
+        if (
+          err instanceof HostApiError &&
+          (err.code === 'NOT_AUTHENTICATED' ||
+            err.code === 'ROOM_NOT_FOUND' ||
+            err.code === 'ROOM_CLOSED')
+        ) {
+          const reason = 'Host session expired. Create a new room.';
+          if (import.meta.env.DEV) setConnectionIssue(reason);
+          terminate(null, reason);
+          opts.onFatal?.(reason);
+          return;
+        }
+        return onHandshakeFailed();
+      }
     }
 
     if (stopped) return;
 
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     let socket: WebSocket;
+    const socketUrl = webSocketUrl(
+      `/ws?room=${encodeURIComponent(opts.code)}&ticket=${encodeURIComponent(ticket)}`,
+    );
+    if (import.meta.env.DEV) console.debug('[host ws] constructing', socketUrl);
     try {
-      socket = new WebSocket(
-        `${proto}//${location.host}/ws?room=${encodeURIComponent(opts.code)}&ticket=${encodeURIComponent(ticket)}`,
-      );
+      socket = new WebSocket(socketUrl);
     } catch {
       return onHandshakeFailed();
     }
     ws = socket;
+
+    socket.onopen = () => {
+      setConnectionIssue(null);
+      if (import.meta.env.DEV) console.debug('[host ws] open', socketUrl);
+    };
 
     socket.onmessage = (ev) => {
       if (socket !== ws) return;
@@ -242,9 +285,13 @@ export function createHostRealtime(opts: RealtimeOptions): RealtimeHandle {
       try {
         parsed = JSON.parse(String(ev.data));
       } catch {
+        if (import.meta.env.DEV) setConnectionIssue('WebSocket sent a non-JSON frame.');
         return;
       }
-      if (!everLive()) {
+      if (import.meta.env.DEV)
+        console.debug('[host ws] message', (parsed as { t?: unknown }).t ?? 'unknown');
+      if (connState() !== 'live') {
+        // Every recovered socket resets backoff, not only the first one ever.
         setEverLive(true);
         wsAttempts = 0;
         stopPolling(); // WS works again — polling fallback stands down
@@ -253,13 +300,22 @@ export function createHostRealtime(opts: RealtimeOptions): RealtimeHandle {
       handleFrame(parsed);
     };
 
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       if (socket !== ws || stopped) return;
+      if (import.meta.env.DEV) {
+        const reason = event.reason || 'no reason supplied';
+        setConnectionIssue(`WebSocket closed (${event.code}): ${reason}`);
+        console.debug('[host ws] close', event.code, reason);
+      }
       teardownSocket();
       onHandshakeFailed();
     };
     socket.onerror = () => {
-      /* close event follows; handled there */
+      if (import.meta.env.DEV) {
+        setConnectionIssue(`WebSocket error while connecting to ${socketUrl}`);
+        console.error('[host ws] error', socketUrl);
+      }
+      /* close event normally follows and adds its code/reason */
     };
 
     startHeartbeat(socket);
@@ -284,6 +340,12 @@ export function createHostRealtime(opts: RealtimeOptions): RealtimeHandle {
     if (stopped) return;
     wsAttempts += 1;
     lastSeq = null; // a fresh handshake must not trust stale sequencing
+    if (pollTimer !== undefined) {
+      // A background probe failed while polling: stay degraded and keep probing.
+      setConnState('polling');
+      scheduleReconnect(WS_RETRY_WHILE_POLLING_MS);
+      return;
+    }
     if (wsAttempts >= MAX_WS_ATTEMPTS && !everLive()) {
       startPolling(); // WS seems unavailable here — degrade gracefully
       return;
@@ -324,10 +386,12 @@ export function createHostRealtime(opts: RealtimeOptions): RealtimeHandle {
   void connect();
 
   return {
+    submissionCount,
     snapshot,
     connState,
     countdownSeconds,
     everLive,
+    connectionIssue,
     stop: () => terminate(null, 'client stopped'), // local stop is not a server terminal event
   };
 }

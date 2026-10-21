@@ -1,11 +1,11 @@
 /**
- * Search proxy (Phase 3): GET /api/v1/search?q= → MusicProvider.search().
+ * Approved catalog search: GET /api/v1/search?q= → ApprovedMusicCatalog.search().
  *
  * Contract (task spec):
  *   - Bearer-auth ANY room member (the request carries no room code, so the
  *     presented session token is resolved against every room's member hashes).
- *   - Rate-limited 60/min per IP (protects the upstream provider quota).
- *   - Results capped at limit=10 (Spotify hard-rejects >10; TDD §4 probes).
+ *   - Rate-limited 60/min per IP.
+ *   - Results capped at 20 and contain only canonical approved tracks.
  *   - Response envelope: {ok,data:{tracks:[Track…]}} (@aux/shared shapes).
  */
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
@@ -14,15 +14,13 @@ import type { Analytics } from '../core/analytics.js';
 import { createRateLimiter, type RateLimiter } from '../core/rate-limit.js';
 import type { RoomManager } from '../core/room-manager.js';
 import { hashToken } from '../core/tokens.js';
-import { MusicProviderError } from '../providers/music-provider.js';
+import { MusicCatalogError, type ApprovedMusicCatalog } from '../providers/music-provider.js';
 
-export const SEARCH_LIMIT_MAX = 10;
+export const SEARCH_LIMIT_MAX = 20;
 const QUERY_MAX = 120;
 
 export interface SearchRouteOptions {
-  provider: import('../providers/music-provider.js').MusicProvider;
-  /** Used when the primary provider fails w/ TOKEN_EXPIRED (host not OAuthed). */
-  fallback?: import('../providers/music-provider.js').MusicProvider;
+  catalog: ApprovedMusicCatalog;
   roomManager: RoomManager;
   analytics?: Analytics;
 }
@@ -54,7 +52,7 @@ function resolveMember(
 }
 
 export function searchRoute(opts: SearchRouteOptions): FastifyPluginAsync {
-  const { provider, roomManager } = opts;
+  const { catalog, roomManager } = opts;
   return async (app: FastifyInstance): Promise<void> => {
     app.get<{ Querystring: { q?: unknown; limit?: unknown } }>(
       '/search',
@@ -78,38 +76,16 @@ export function searchRoute(opts: SearchRouteOptions): FastifyPluginAsync {
             : SEARCH_LIMIT_MAX;
 
         try {
-          const tracks = await provider.search(q, limit);
+          const tracks = await catalog.search(q, limit);
           return reply.send({ ok: true as const, data: { tracks } });
         } catch (err) {
-          if (err instanceof MusicProviderError) {
-            // No live host session (or stale token): degrade to the fallback
-            // catalog instead of breaking song-picking (owner condition: the
-            // party must never dead-end on provider state).
-            if (err.code === 'TOKEN_EXPIRED' && opts.fallback !== undefined) {
-              try {
-                const tracks = await opts.fallback.search(q, limit);
-                return reply.send({ ok: true as const, data: { tracks } });
-              } catch {
-                // fall through to normal error mapping
-              }
-            }
-            if (err.code === 'RATE_LIMITED') {
-              const retry = err.retryAfterSecs ?? 30;
-              reply.header('retry-after', String(retry));
-              return reply.code(429).send(
-                apiError('RATE_LIMITED', 'music provider is rate limiting us', {
-                  retryAfterSecs: retry,
-                }),
-              );
-            }
+          if (err instanceof MusicCatalogError) {
             opts.analytics?.emit({
               type: 'provider_failure',
               roomId: auth.code,
               op: 'search',
             });
-            return reply
-              .code(502)
-              .send(apiError('INTERNAL', `music provider unavailable (${err.code})`));
+            return reply.code(503).send(apiError('INTERNAL', 'approved music catalog unavailable'));
           }
           throw err;
         }

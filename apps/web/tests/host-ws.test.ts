@@ -15,7 +15,7 @@ function snapshotData(overrides: Record<string, unknown> = {}) {
     state: 'LOBBY',
     roundIdx: 0,
     phaseEndsAt: null,
-    playbackMode: 'api',
+    playbackMode: 'catalog',
     players: [{ nickname: 'Hosty', connected: true }],
     submissionsCount: 0,
     you: { role: 'host', hasSubmitted: false, nickname: 'Hosty' },
@@ -33,7 +33,7 @@ class FakeWebSocket {
   onopen: (() => void) | null = null;
   onmessage: ((ev: { data: string }) => void) | null = null;
   onerror: (() => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event: { code: number; reason: string }) => void) | null = null;
   constructor(public url: string) {
     FakeWebSocket.instances.push(this);
   }
@@ -43,7 +43,7 @@ class FakeWebSocket {
   close() {
     if (this.readyState === 3) return;
     this.readyState = 3;
-    this.onclose?.();
+    this.onclose?.({ code: 1000, reason: '' });
   }
   // Test hooks
   open() {
@@ -52,6 +52,11 @@ class FakeWebSocket {
   }
   receive(obj: unknown) {
     this.onmessage?.({ data: JSON.stringify(obj) });
+  }
+  fail(code: number, reason: string) {
+    this.readyState = 3;
+    this.onerror?.();
+    this.onclose?.({ code, reason });
   }
 }
 
@@ -153,6 +158,36 @@ describe('createHostRealtime', () => {
     rt.stop();
   });
 
+  it('uses a validated restore ticket without requesting a second one', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const rt = createHostRealtime({
+      code: CODE,
+      hostToken: 'host-tok',
+      initialTicket: 'restore-ticket',
+    });
+    await flush();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances[0]?.url).toContain('ticket=restore-ticket');
+    rt.stop();
+  });
+
+  it('constructs the LAN-origin URL and exposes close details in development', async () => {
+    vi.stubGlobal('location', { protocol: 'http:', host: '192.168.50.25:5173' });
+    installFetch();
+    const rt = createHostRealtime({ code: CODE, hostToken: 'host-tok' });
+    await flush();
+
+    const sock = FakeWebSocket.instances[0];
+    expect(sock.url).toMatch(/^ws:\/\/192\.168\.50\.25:5173\/ws\?/);
+    sock.fail(1006, 'proxy upgrade failed');
+
+    expect(rt.connectionIssue()).toBe('WebSocket closed (1006): proxy upgrade failed');
+    expect(rt.connState()).toBe('reconnecting');
+    rt.stop();
+  });
+
   it('renders countdown locally from absolute phaseEndsAt (D-C)', async () => {
     installFetch();
     const rt = createHostRealtime({ code: CODE, hostToken: 'host-tok' });
@@ -200,6 +235,22 @@ describe('createHostRealtime', () => {
     rt.stop();
   });
 
+  it('tracks informational frame sequences without falsely reconnecting', async () => {
+    installFetch();
+    const rt = createHostRealtime({ code: CODE, hostToken: 'host-tok' });
+    await flush();
+    const sock = FakeWebSocket.instances[0];
+    sock.open();
+    sock.receive({ t: 'state_change', ts: 1, seq: 7, snapshot: snapshotData() });
+    sock.receive({ t: 'submission_received', ts: 2, seq: 8, count: 1 });
+    sock.receive({ t: 'state_change', ts: 3, seq: 9, snapshot: snapshotData() });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(rt.connState()).toBe('live');
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    rt.stop();
+  });
+
   it('surfaces room_closed as a terminal event without reconnecting', async () => {
     installFetch();
     let terminal: { kind: string; reason: string } | null = null;
@@ -218,5 +269,42 @@ describe('createHostRealtime', () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(FakeWebSocket.instances.length).toBe(1); // no redial after terminal
     rt.stop();
+  });
+
+  it('stops permanently on an invalid host session instead of farming tickets', async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse(401, {
+        ok: false,
+        error: { code: 'NOT_AUTHENTICATED', message: 'expired' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    let fatal = '';
+    const rt = createHostRealtime({
+      code: CODE,
+      hostToken: 'stale-token',
+      onFatal: (reason) => (fatal = reason),
+    });
+    await flush();
+
+    expect(rt.connState()).toBe('closed');
+    expect(fatal).toContain('expired');
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('stop tears down the old room socket and cancels future reconnects', async () => {
+    installFetch();
+    const rt = createHostRealtime({ code: CODE, hostToken: 'host-tok' });
+    await flush();
+    const sock = FakeWebSocket.instances[0];
+    sock.open();
+    sock.receive({ t: 'state_change', ts: 1, seq: 1, snapshot: snapshotData() });
+
+    rt.stop();
+    expect(sock.readyState).toBe(FakeWebSocket.CLOSED);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 });

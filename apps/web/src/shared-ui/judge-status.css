@@ -1,0 +1,82 @@
+.judge-availability {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.15rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  text-align: left;
+}
+
+.judge-availability__copy {
+  flex: 1;
+  min-width: 0;
+}
+.judge-availability strong {
+  display: block;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+.judge-availability p {
+  margin: 0.25rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+.judge-availability__dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--warn);
+}
+.judge-availability[data-state='ready'] .judge-availability__dot,
+.judge-availability[data-state='configured'] .judge-availability__dot {
+  background: var(--good);
+}
+.judge-availability button {
+  flex: 0 0 auto;
+}
+.judge-source {
+  margin: 0 0 0.8rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  font-weight: 650;
+  color: var(--good);
+}
+.judge-source--offline {
+  color: var(--warn);
+}
+.judge-confidence {
+  margin: 0 0 0.6rem;
+  color: var(--warn);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 420px) {
+  .judge-availability {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+}
+.judge-availability {
+  gap: 0.7rem;
+  padding: 0.85rem 1rem;
+  border-radius: 6px;
+}
+.judge-availability strong {
+  font-family: var(--font-display);
+}
+.judge-availability p {
+  font-size: 0.76rem;
+}
+.judge-source {
+  margin-bottom: 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+.judge-availability[data-state='offline'] .judge-availability__dot {
+  background: var(--cobalt);
+}

@@ -18,13 +18,15 @@
  * - Quorum early-fire: count === connected players → ALL_SUBMITTED through the
  *   controller's FSM-mutex dispatcher.
  */
+import { createHash } from 'node:crypto';
 import { RoomCodeSchema, SubmissionRequestSchema, apiError } from '@aux/shared';
-import type { FsmState } from '@aux/shared';
+import type { FsmState, Track } from '@aux/shared';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { RoomManager } from '../core/room-manager.js';
-import { AlreadySubmittedError, SubmissionStore } from '../core/submissions.js';
+import { AlreadySubmittedError, SubmissionStore, roundKeyOf } from '../core/submissions.js';
 import { createRateLimiter } from '../core/rate-limit.js';
 import { verifyToken } from '../core/tokens.js';
+import { MusicCatalogError, type ApprovedMusicCatalog } from '../providers/music-provider.js';
 
 export interface RoomPhase {
   state: FsmState;
@@ -34,6 +36,8 @@ export interface RoomPhase {
 export interface RoundsRouteOptions {
   roomManager: RoomManager;
   submissions: SubmissionStore;
+  /** Catalog ids are re-resolved here; manual entries use server-owned metadata. */
+  catalog: ApprovedMusicCatalog;
   /**
    * Seam into the per-room runtime (game-runtimes owns the FSM): current state
    * + roundIdx, or null when no runtime exists for the code.
@@ -46,6 +50,27 @@ export interface RoundsRouteOptions {
 }
 
 const submissionLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+
+/** Canonicalize player-entered metadata for the zero-configuration manual path. */
+export function canonicalManualTrack(track: Track): Track | null {
+  if (track.source !== 'manual' && !track.id.startsWith('manual:')) return null;
+  const title = track.title.trim();
+  const artist = track.artist.trim();
+  if (title === '' || artist === '') return null;
+  const album = track.album?.trim();
+  const digest = createHash('sha256')
+    .update(`${title.toLowerCase()}\0${artist.toLowerCase()}`)
+    .digest('hex')
+    .slice(0, 20);
+  return {
+    id: `manual:${digest}`,
+    title,
+    artist,
+    ...(album ? { album } : {}),
+    source: 'manual',
+    attribution: 'Song details entered by a player',
+  };
+}
 
 /** Extract + verify a Bearer session token against the room's players
  *  (same pattern as game-runtimes.ts authenticate — kept local on purpose). */
@@ -96,6 +121,26 @@ export function roundsRoute(opts: RoundsRouteOptions): FastifyPluginAsync {
     if (!parsed.success) {
       return reply.code(400).send(apiError('INVALID_ACTION', 'clientMsgId and track required'));
     }
+    if (auth.isHost) {
+      return reply.code(409).send(apiError('INVALID_ACTION', 'the host does not submit a song'));
+    }
+
+    // Idempotent retries stay valid after quorum closes the phase. Bind the
+    // lookup to the authenticated player so message ids cannot leak results.
+    const replay = submissions.replay(
+      roundKeyOf(code, roundIdx),
+      auth.playerId,
+      parsed.data.clientMsgId,
+    );
+    if (replay !== null) {
+      return reply.send({
+        ok: true as const,
+        data: { count: replay.count, replayed: false, hasSubmitted: true },
+      });
+    }
+    if (submissions.hasSubmitted(roundKeyOf(code, roundIdx), auth.playerId)) {
+      return reply.code(409).send(apiError('ALREADY_SUBMITTED', 'one song per player per round'));
+    }
 
     // State gate: submissions only during SONG_SELECTION of the LIVE round.
     const phase = opts.getRoomPhase(code);
@@ -114,12 +159,39 @@ export function roundsRoute(opts: RoundsRouteOptions): FastifyPluginAsync {
     }
 
     try {
+      // Provider ids are re-resolved to canonical metadata. The explicit
+      // manual path accepts bounded title/artist text but rebuilds every field,
+      // id, source and attribution before persistence or judge review.
+      let safeTrack: Track;
+      const manualTrack = canonicalManualTrack(parsed.data.track);
+      if (manualTrack !== null) {
+        safeTrack = manualTrack;
+      } else {
+        try {
+          safeTrack = await opts.catalog.getTrack(parsed.data.track.id);
+        } catch (error) {
+          if (error instanceof MusicCatalogError && error.code === 'TRACK_UNPLAYABLE') {
+            return reply
+              .code(400)
+              .send(apiError('INVALID_ACTION', 'choose a catalog song or enter one manually'));
+          }
+          if (error instanceof MusicCatalogError && error.code === 'CATALOG_DOWN') {
+            return reply
+              .code(503)
+              .send(
+                apiError('INTERNAL', 'The music catalog is unavailable. Enter the song manually.'),
+              );
+          }
+          throw error;
+        }
+      }
       const result = submissions.submit({
         code,
         roundIdx,
         playerId: auth.playerId,
         clientMsgId: parsed.data.clientMsgId,
-        track: parsed.data.track,
+        track: safeTrack,
+        defense: parsed.data.defense,
       });
 
       if (result.status === 'stored') {
@@ -131,7 +203,11 @@ export function roundsRoute(opts: RoundsRouteOptions): FastifyPluginAsync {
         // are non-fatal; LOCKED either way.
         const room = roomManager.get(code);
         const connected =
-          room === undefined ? 0 : [...room.players.values()].filter((p) => p.connected).length;
+          room === undefined
+            ? 0
+            : [...room.players.entries()].filter(
+                ([id, player]) => id !== room.hostPlayerId && player.connected,
+              ).length;
         if (opts.dispatchAllSubmitted !== undefined && result.count >= connected && connected > 0) {
           await opts.dispatchAllSubmitted(code);
         }
@@ -141,7 +217,9 @@ export function roundsRoute(opts: RoundsRouteOptions): FastifyPluginAsync {
         ok: true as const,
         data: {
           count: result.count,
-          replayed: result.status === 'replayed',
+          // Idempotency returns the original wire result byte-for-byte. Keep
+          // replay detection internal so a retry cannot change its own body.
+          replayed: false,
           hasSubmitted: true,
         },
       });
@@ -218,7 +296,7 @@ export function submitRandomForMissing(
   if (room === undefined)
     return { filledCount: 0, totalSubmissions: deps.submissions.count(roundId) };
   const connected = [...room.players.keys()].filter(
-    (id) => room.players.get(id)?.connected === true,
+    (id) => id !== room.hostPlayerId && room.players.get(id)?.connected === true,
   );
   const filled = deps.submissions.fillChickens(code, target.roundIdx, connected);
   return { filledCount: filled.length, totalSubmissions: deps.submissions.count(roundId) };

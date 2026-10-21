@@ -7,24 +7,19 @@
  *    token → 200/201; repeat (different song) → 409 ALREADY_SUBMITTED; SAME
  *    clientMsgId replay → the ORIGINAL result, idempotently; non-member token
  *    → 401; submit during LOBBY → 409 INVALID_ACTION.
- *  - GET /api/v1/search?q=… member-auth → {ok,data:{tracks}} with ≤10 tracks.
+ *  - GET /api/v1/search?q=… member-auth → {ok,data:{tracks}} with ≤20 tracks.
  *  - Anonymity: `submission_received` WS frames carry COUNT ONLY — no
  *    nickname/playerId anywhere in the raw frame payload (TDD §7).
  *  - Races: 8 parallel submits (distinct players) all succeed with counts
  *    1..8 broadcast; same-player double-submit race → exactly one winner;
  *    quorum early-fire: ALL_SUBMITTED flips SONG_SELECTION→LOCKED the moment
  *    count reaches the roster.
- *
- * Self-skipping: this suite activates AUTOMATICALLY once routes/rounds.ts +
- * routes/search.ts (+ their core deps) land and are wired into index.ts.
- * Until then every test SKIPS with the reason, keeping the gate green —
- * same guard pattern as spotify-provider.test.ts.
  */
-import { afterAll, beforeAll, describe, expect, it, type TestContext } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket, { type RawData } from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/index.js';
-import { TrackSchema } from '@aux/shared';
+import { AUX_ORIGINAL_TRACKS, TrackSchema } from '@aux/shared';
 
 const API = '/api/v1';
 
@@ -38,31 +33,6 @@ let base = '';
  * wiring) and the search proxy land independently, so one sibling missing
  * must not skip the other's tests.
  */
-let moduleSkip = ''; // a sibling FILE is missing entirely → skip everything
-let roundsWired = false; // POST /api/v1/rounds/:id/submissions registered
-let searchWired = false; // GET /api/v1/search registered
-
-/** Skip while ANY Phase-3 sibling file is still absent. */
-function requireReady(ctx: TestContext): void {
-  if (moduleSkip !== '') ctx.skip(true, moduleSkip);
-}
-
-/** Skip until routes/rounds.ts (+ orchestrator) is wired into index.ts. */
-function requireRounds(ctx: TestContext): void {
-  requireReady(ctx);
-  if (!roundsWired) {
-    ctx.skip(true, 'routes/rounds.ts exists but is not wired into index.ts yet');
-  }
-}
-
-/** Skip until routes/search.ts is wired into index.ts. */
-function requireSearch(ctx: TestContext): void {
-  requireReady(ctx);
-  if (!searchWired) {
-    ctx.skip(true, 'routes/search.ts exists but is not wired into index.ts yet');
-  }
-}
-
 /** A Fastify default 404 has NO `ok` field — that means "route not registered". */
 function hasErrorEnvelope(res: { statusCode: number; json(): unknown }): boolean {
   let body: unknown;
@@ -75,43 +45,26 @@ function hasErrorEnvelope(res: { statusCode: number; json(): unknown }): boolean
 }
 
 beforeAll(async () => {
-  // 1) Module probe — do the sibling files exist at all?
-  const missing: string[] = [];
-  for (const mod of [
-    '../src/routes/rounds.js',
-    '../src/routes/search.js',
-    '../src/core/submissions.js',
-    '../src/core/round-orchestrator.js',
-  ]) {
-    try {
-      await import(mod);
-    } catch {
-      missing.push(mod.replace('../src/', '').replace('.js', '.ts'));
-    }
-  }
-  if (missing.length > 0) {
-    moduleSkip = `not implemented yet: ${missing.join(', ')}`;
-  }
-
-  // Build the server regardless so helpers resolve; tests skip while guarded.
   ({ app } = await buildServer({
     LOG_LEVEL: 'error',
     AUX_DEV_MODE: '0',
     AUX_DB_FILE: ':memory:',
+    AUX_ENABLE_ORIGINALS: '1',
   }));
 
-  // 2) Wiring probes — are the Phase-3 routes actually registered?
-  roundsWired = hasErrorEnvelope(
+  const roundsWired = hasErrorEnvelope(
     await app.inject({ method: 'POST', url: `${API}/rounds/ABCDE:0/submissions`, payload: {} }),
   );
-  searchWired = hasErrorEnvelope(await app.inject({ method: 'GET', url: `${API}/search?q=a` }));
-
-  // Real listen ONLY for the WS anonymity/race suites (frames need sockets).
-  if (moduleSkip === '' && roundsWired) {
-    await app.listen({ port: 0, host: '127.0.0.1' });
-    const addr = app.server.address() as { port: number };
-    base = `http://127.0.0.1:${addr.port}`;
+  const searchWired = hasErrorEnvelope(
+    await app.inject({ method: 'GET', url: `${API}/search?q=a` }),
+  );
+  if (!roundsWired || !searchWired) {
+    throw new Error('required rounds/search routes are not registered');
   }
+
+  await app.listen({ port: 0, host: '127.0.0.1' });
+  const addr = app.server.address() as { port: number };
+  base = `http://127.0.0.1:${addr.port}`;
 });
 
 afterAll(async () => {
@@ -188,7 +141,13 @@ function makeTrack(title: string): {
   durationMs: number;
 } {
   trackSeq += 1;
-  return { id: `fixture-track-${trackSeq}`, title, artist: 'Test Artist', durationMs: 200_000 };
+  const approved = AUX_ORIGINAL_TRACKS[(trackSeq - 1) % AUX_ORIGINAL_TRACKS.length]!;
+  return {
+    id: approved.id,
+    title,
+    artist: 'Tampered client metadata',
+    durationMs: approved.durationMs,
+  };
 }
 
 function submit(
@@ -209,8 +168,7 @@ function submit(
 // ── Submission contract ───────────────────────────────────────────────────────
 
 describe('POST /api/v1/rounds/:id/submissions', () => {
-  it('accepts a member submission in SONG_SELECTION, replays idempotently, rejects repeats', async (ctx) => {
-    requireRounds(ctx);
+  it('accepts a member submission in SONG_SELECTION, replays idempotently, rejects repeats', async () => {
     const { code, hostToken } = await createRoom();
     const p1 = await join(code, 'Ada');
     await toSongSelection(code, hostToken);
@@ -255,8 +213,7 @@ describe('POST /api/v1/rounds/:id/submissions', () => {
     expectError(garbage, 401);
   });
 
-  it('rejects a submission during LOBBY with 409 INVALID_ACTION', async (ctx) => {
-    requireRounds(ctx);
+  it('rejects a submission during LOBBY with 409 INVALID_ACTION', async () => {
     const { code, hostToken } = await createRoom();
     const p = await join(code, 'Lobby Larry');
     // Room stays in LOBBY — no start_game.
@@ -279,14 +236,12 @@ describe('POST /api/v1/rounds/:id/submissions', () => {
 // ── Search proxy ──────────────────────────────────────────────────────────────
 
 describe('GET /api/v1/search', () => {
-  it('requires member auth (401 without a token)', async (ctx) => {
-    requireSearch(ctx); // search proxy lands independently
+  it('requires member auth (401 without a token)', async () => {
     const res = await app.inject({ method: 'GET', url: `${API}/search?q=song` });
     expectError(res, 401, 'NOT_AUTHENTICATED');
   });
 
-  it('returns {ok,data:{tracks}} capped at 10 for a member', async (ctx) => {
-    requireSearch(ctx); // search proxy lands independently
+  it('returns {ok,data:{tracks}} capped at 20 for a member', async () => {
     const { hostToken } = await createRoom();
 
     const res = await app.inject({
@@ -297,12 +252,11 @@ describe('GET /api/v1/search', () => {
     const d = expectOk(res);
     const tracks = d.tracks as unknown[];
     expect(Array.isArray(tracks)).toBe(true);
-    expect(tracks.length).toBeLessThanOrEqual(10);
+    expect(tracks.length).toBeLessThanOrEqual(20);
     for (const t of tracks) expect(TrackSchema.safeParse(t).success).toBe(true);
   });
 
-  it('never leaks provider internals — envelope shape only', async (ctx) => {
-    requireSearch(ctx); // search proxy lands independently
+  it('never leaks provider internals — envelope shape only', async () => {
     const { hostToken } = await createRoom();
     const res = await app.inject({
       method: 'GET',
@@ -402,8 +356,7 @@ async function nextN(
 // ── Anonymity (TDD §7): submission_received carries COUNT ONLY ────────────────
 
 describe('submission_received anonymity', () => {
-  it('broadcasts count only — no nickname/playerId anywhere in the frame payload', async (ctx) => {
-    requireRounds(ctx);
+  it('broadcasts count only — no nickname/playerId anywhere in the frame payload', async () => {
     const { code, hostToken } = await createRoom();
     const p1 = await join(code, 'Secretive Sam');
     await toSongSelection(code, hostToken);
@@ -434,8 +387,7 @@ describe('submission_received anonymity', () => {
     }
   });
 
-  it('keeps the frame inside the shared server-frame vocabulary', async (ctx) => {
-    requireRounds(ctx);
+  it('keeps the frame inside the shared server-frame vocabulary', async () => {
     const { code, hostToken } = await createRoom();
     const p1 = await join(code, 'Schema Sam');
     await toSongSelection(code, hostToken);
@@ -462,8 +414,7 @@ describe('submission_received anonymity', () => {
 // ── Races (TDD §6: DB constraints are the arbiter, no read-modify-write) ──────
 
 describe('submission races', () => {
-  it('8 parallel distinct-player submits all succeed; counts 1..8 broadcast', async (ctx) => {
-    requireRounds(ctx);
+  it('8 parallel distinct-player submits all succeed; counts 1..8 broadcast', async () => {
     const { code, hostToken } = await createRoom();
     const players = [];
     for (let i = 0; i < 8; i++) players.push(await join(code, `Racer ${i + 1}`));
@@ -494,8 +445,7 @@ describe('submission races', () => {
     }
   }, 20_000);
 
-  it('same-player double-submit race → exactly one winner, loser gets 409 ALREADY_SUBMITTED', async (ctx) => {
-    requireRounds(ctx);
+  it('same-player double-submit race → exactly one winner, loser gets 409 ALREADY_SUBMITTED', async () => {
     const { code, hostToken } = await createRoom();
     const p = await join(code, 'Double Tap');
     await toSongSelection(code, hostToken);
@@ -505,15 +455,14 @@ describe('submission races', () => {
       submit(code, p.playerToken, { clientMsgId: 'cm-tap-b-0001', track: makeTrack('Tap B') }),
     ]);
 
-    const statuses = [a.statusCode, b.statusCode].sort();
+    const statuses = [a.statusCode, b.statusCode].sort((left, right) => right - left);
     expect(statuses[0]).toBe(409);
     expect([200, 201]).toContain(statuses[1]);
     const loser = a.statusCode === 409 ? a : b;
     expectError(loser, 409, 'ALREADY_SUBMITTED');
   }, 20_000);
 
-  it('quorum early-fire: ALL_SUBMITTED dispatches to LOCKED once everyone submitted', async (ctx) => {
-    requireRounds(ctx);
+  it('quorum early-fire: ALL_SUBMITTED dispatches to LOCKED once everyone submitted', async () => {
     const { code, hostToken } = await createRoom();
     const q1 = await join(code, 'Quorum One');
     const q2 = await join(code, 'Quorum Two');
@@ -525,11 +474,11 @@ describe('submission races', () => {
     };
     expect(await gameState()).toBe('SONG_SELECTION');
 
-    // Every roster member submits (host included — the roster IS the quorum).
+    // Every phone participant submits; the host controls the round but does
+    // not count toward the song-selection quorum.
     // The LAST submission must flip the FSM via ALL_SUBMITTED without waiting
     // anywhere near the 90 s SONG_SELECTION deadline.
     const identities = [
-      { token: hostToken, label: 'host' },
       { token: q1.playerToken, label: 'quorum-one' },
       { token: q2.playerToken, label: 'quorum-two' },
     ];

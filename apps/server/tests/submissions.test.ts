@@ -7,12 +7,32 @@
 import { describe, expect, it } from 'vitest';
 import Fastify from 'fastify';
 import { AlreadySubmittedError, SubmissionStore } from '../src/core/submissions.js';
-import { roundsRoute, submitRandomForMissing, parseRoundId } from '../src/routes/rounds.js';
+import {
+  canonicalManualTrack,
+  roundsRoute,
+  submitRandomForMissing,
+  parseRoundId,
+} from '../src/routes/rounds.js';
 import { RoomManager } from '../src/core/room-manager.js';
 import type { Track } from '@aux/shared';
+import { MusicCatalogError, type ApprovedMusicCatalog } from '../src/providers/music-provider.js';
 
 const TRACK_A: Track = { id: 't1', title: 'Song A', artist: 'Artist A' };
 const TRACK_B: Track = { id: 't2', title: 'Song B', artist: 'Artist B' };
+const TEST_TRACKS = new Map([TRACK_A, TRACK_B].map((track) => [track.id, track]));
+const TEST_CATALOG: ApprovedMusicCatalog = {
+  search: async () => [...TEST_TRACKS.values()],
+  listTracks: () => [...TEST_TRACKS.values()],
+  async getTrack(id) {
+    const track = TEST_TRACKS.get(id);
+    if (track === undefined) throw new MusicCatalogError('TRACK_UNPLAYABLE');
+    return { ...track, source: 'original', attribution: 'Test-owned original' };
+  },
+  playableTrack({ id }) {
+    const track = TEST_TRACKS.get(id);
+    return track === undefined ? null : { ...track, source: 'original' };
+  },
+};
 
 function makeRoom() {
   const roomManager = new RoomManager();
@@ -23,6 +43,31 @@ function makeRoom() {
 }
 
 describe('SubmissionStore', () => {
+  it('stores a sanitized, bounded defense with the submission', () => {
+    const store = new SubmissionStore();
+    const res = store.submit({
+      code: 'ABC23',
+      roundIdx: 0,
+      playerId: 'p1',
+      clientMsgId: 'cmid-defense-1',
+      track: TRACK_A,
+      defense: '  because\u0000 the   drop hits\n exactly when the door opens ' + 'x'.repeat(400),
+    });
+    expect(res.submission.defense).toMatch(
+      /^because the drop hits exactly when the door opens x+$/,
+    );
+    expect(res.submission.defense?.length).toBe(160);
+    const silent = store.submit({
+      code: 'ABC23',
+      roundIdx: 0,
+      playerId: 'p2',
+      clientMsgId: 'cmid-defense-2',
+      track: TRACK_B,
+      defense: '   ',
+    });
+    expect(silent.submission).not.toHaveProperty('defense');
+  });
+
   it('stores a submission and reports count', () => {
     const store = new SubmissionStore();
     const res = store.submit({
@@ -100,6 +145,7 @@ describe('SubmissionStore', () => {
 
   it('fillChickens auto-fills only connected non-submitters as 🐔', () => {
     const store = new SubmissionStore();
+    store.setChickenTracks([TRACK_A, TRACK_B]);
     store.submit({
       code: 'ABC23',
       roundIdx: 0,
@@ -156,6 +202,7 @@ describe('rounds route', () => {
     const room = makeRoom();
     const code = room.code;
     const submissions = new SubmissionStore();
+    submissions.setChickenTracks(TEST_CATALOG.listTracks());
     let phaseState = 'SONG_SELECTION';
     let roundIdx = 0;
     const broadcasts: Array<{ code: string; count: number }> = [];
@@ -163,6 +210,7 @@ describe('rounds route', () => {
     const plugin = roundsRoute({
       roomManager: room.roomManager,
       submissions,
+      catalog: TEST_CATALOG,
       getRoomPhase: (c) => (c === code ? { state: phaseState as never, roundIdx } : null),
       dispatchAllSubmitted: async (c) => {
         dispatched.push(c);
@@ -227,7 +275,7 @@ describe('rounds route', () => {
       track: TRACK_B,
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ ok: true, data: { count: 3 } });
+    expect(res.json()).toMatchObject({ ok: true, data: { count: 2 } });
     expect(ctx.dispatched).toEqual([ctx.code]);
     await app.close();
   });
@@ -265,7 +313,7 @@ describe('rounds route', () => {
       track: TRACK_B,
     });
     expect(replay.statusCode).toBe(200);
-    expect(replay.json()).toMatchObject({ ok: true, data: { replayed: true } });
+    expect(replay.json()).toMatchObject({ ok: true, data: { replayed: false } });
     await app.close();
   });
 
@@ -294,6 +342,54 @@ describe('rounds route', () => {
     await app.close();
   });
 
+  it('canonicalizes catalog picks, rejects unknown ids, and safely accepts manual picks', async () => {
+    const ctx = buildPlugin();
+    const app = Fastify();
+    await app.register(ctx.plugin, { prefix: '/api/v1' });
+    const url = `/api/v1/rounds/${ctx.code}:0/submissions`;
+    const accepted = await submit(app, url, ctx.p1.playerToken, {
+      clientMsgId: 'msg-canon-p1',
+      track: { id: TRACK_A.id, title: 'Tampered Title', artist: 'Unknown Upload' },
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(ctx.submissions.list(`${ctx.code}:0`)[0]?.track).toMatchObject({
+      title: TRACK_A.title,
+      artist: TRACK_A.artist,
+      source: 'original',
+    });
+
+    const rejected = await submit(app, url, ctx.p2.playerToken, {
+      clientMsgId: 'msg-external-p2',
+      track: { id: 'external:not-approved', title: 'Unknown', artist: 'Unknown' },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json()).toMatchObject({ ok: false, error: { code: 'INVALID_ACTION' } });
+
+    const manual = await submit(app, url, ctx.p2.playerToken, {
+      clientMsgId: 'msg-manual-p2',
+      track: {
+        id: 'manual:client-placeholder',
+        title: '  Dreams  ',
+        artist: ' Fleetwood Mac ',
+        source: 'manual',
+        artUrl: 'https://example.invalid/untrusted.jpg',
+        externalUrl: 'https://example.invalid/untrusted',
+      },
+    });
+    expect(manual.statusCode).toBe(200);
+    const storedManual = ctx.submissions.list(`${ctx.code}:0`)[1]?.track;
+    expect(storedManual).toMatchObject({
+      title: 'Dreams',
+      artist: 'Fleetwood Mac',
+      source: 'manual',
+      attribution: 'Song details entered by a player',
+    });
+    expect(storedManual?.id).toMatch(/^manual:[a-f0-9]{20}$/);
+    expect(storedManual).not.toHaveProperty('artUrl');
+    expect(storedManual).not.toHaveProperty('externalUrl');
+    await app.close();
+  });
+
   it('submitRandomForMissing fills connected non-submitters only', () => {
     const ctx = buildPlugin();
     ctx.submissions.submit({
@@ -307,8 +403,8 @@ describe('rounds route', () => {
       roomManager: ctx.roomManager,
       submissions: ctx.submissions,
     });
-    expect(summary.filledCount).toBe(2); // p2 AND the connected, silent host get 🐔
-    expect(summary.totalSubmissions).toBe(3);
+    expect(summary.filledCount).toBe(1); // p2 only; the host is not a contestant
+    expect(summary.totalSubmissions).toBe(2);
     const subs = ctx.submissions.list(`${ctx.code}:0`);
     expect(subs.filter((s) => s.chicken).length).toBe(summary.filledCount);
   });
@@ -320,5 +416,23 @@ describe('parseRoundId', () => {
     expect(parseRoundId('nope')).toBeNull();
     expect(parseRoundId('AB23:0')).toBeNull(); // 4 chars — invalid code
     expect(parseRoundId('ABC23:x')).toBeNull();
+  });
+});
+
+describe('canonicalManualTrack', () => {
+  it('uses a stable server-owned identity for equivalent player text', () => {
+    const first = canonicalManualTrack({
+      id: 'manual:first',
+      title: ' Dreams ',
+      artist: 'FLEETWOOD MAC',
+      source: 'manual',
+    });
+    const second = canonicalManualTrack({
+      id: 'manual:second',
+      title: 'dreams',
+      artist: 'fleetwood mac',
+      source: 'manual',
+    });
+    expect(first?.id).toBe(second?.id);
   });
 });

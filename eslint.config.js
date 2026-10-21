@@ -2,7 +2,11 @@ import tseslint from 'typescript-eslint';
 import prettier from 'eslint-config-prettier';
 
 export default tseslint.config(
-  { ignores: ['**/node_modules/**', '**/dist/**', '**/coverage/**'] },
+  {
+    // Capacitor mirrors the already-built/minified web bundle into these
+    // generated native projects. Lint the source once, before it is copied.
+    ignores: ['**/node_modules/**', '**/dist/**', '**/coverage/**', 'android/**', 'ios/**'],
+  },
   ...tseslint.configs.recommended,
   prettier,
   {

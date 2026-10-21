@@ -1,12 +1,6 @@
 /**
- * Sealed / waiting screen (frontend-spec §2.7) — full-screen takeover, calm but alive.
- *
- * - SEALED 🤐: giant padlock over your frosted choice; resubmission UI is gone.
- *   Live "waiting for others… N/M submitted" fed by WS `submission_received`
- *   count frames via the realtime handle's `submissionCount` signal, with the
- *   polling fallback keeping it truthful when WS is down (ws.ts owns that).
- * - CHICKEN 🐔: the timer expired before you locked and the AI judge assigned
- *   you a random song — shame-as-mechanics display state.
+ * Sealed / waiting screen: your pick is locked, now watch the room fill up.
+ * CHICKEN: the timer ran out and the server assigned a random song.
  */
 import { For, Show } from 'solid-js';
 import type { JSX } from 'solid-js';
@@ -14,10 +8,10 @@ import type { Track } from '@aux/shared';
 import { TrackArt } from '../shared-ui/track-card.js';
 
 const WAITING_COPY = [
-  'waiting for stragglers…',
-  'someone out there is still scrolling…',
-  'the lock is sealed. no takebacks.',
-  'sharpening the judge…',
+  'Waiting for the others',
+  'Someone is still scrolling',
+  'No take-backs',
+  'Judge warming up',
 ];
 
 export function SealedScreen(props: {
@@ -29,65 +23,56 @@ export function SealedScreen(props: {
   totalPlayers: () => number | null;
   countdownSeconds: () => number | null;
 }): JSX.Element {
-  const statusLine = (): string => {
-    const lines = WAITING_COPY;
-    return lines[props.roundIdx % lines.length] ?? lines[0]!;
-  };
-  const progress = (): string => {
-    const n = props.submitted();
-    const m = props.totalPlayers();
-    if (n === null || m === null || m === 0) return 'counting heads…';
-    return `waiting for others… ${n}/${m} submitted`;
-  };
+  const statusLine = () => WAITING_COPY[props.roundIdx % WAITING_COPY.length]!;
+  const n = () => props.submitted() ?? 0;
+  const m = () => props.totalPlayers() ?? 0;
 
   return (
-    <div class="p-screen p-sealed-screen" data-chicken={props.chicken ? 'true' : undefined}>
-      <header class="p-head">
-        <p class="p-round-tag">round {props.roundIdx + 1}</p>
+    <div class="p-screen p-sealed" data-chicken={props.chicken ? 'true' : undefined}>
+      <header class="p-top">
+        <span class="kicker">Round {props.roundIdx + 1}</span>
+        <Show when={props.countdownSeconds() !== null && !props.chicken}>
+          <span class="p-timer mono" role="timer">
+            {props.countdownSeconds()}s
+          </span>
+        </Show>
       </header>
 
-      <div class="p-card p-seal-card">
-        <span class="p-seal-lock" aria-hidden="true">
-          🔒
+      <div class="p-sealed-card pop">
+        <span class="stamp" classList={{ 'stamp--cream': props.chicken }}>
+          {props.chicken ? 'Chicken' : 'Locked'}
         </span>
-
         <Show
           when={props.chicken}
           fallback={
-            <>
-              <p class="p-seal-stamp">SEALED 🤐</p>
-              <Show when={props.track} keyed>
-                {(t) => (
-                  <div class="p-seal-pick">
-                    <TrackArt track={t} size={56} class="p-seal-art" />
-                    <span class="p-seal-track">{t.title}</span>
-                    <span class="p-seal-artist">{t.artist}</span>
-                  </div>
-                )}
-              </Show>
-            </>
+            <Show when={props.track} keyed>
+              {(t) => (
+                <div class="p-sealed-pick">
+                  <TrackArt track={t} size={72} />
+                  <span class="p-sealed-title">{t.title}</span>
+                  <span class="p-sealed-artist">{t.artist}</span>
+                </div>
+              )}
+            </Show>
           }
         >
-          {/* Timer expired with nothing picked — the judge assigned a random song. */}
-          <p class="p-chicken-stamp">CHICKEN 🐔</p>
-          <p class="p-sub">time ran out — the judge picked a random song for you</p>
+          <p class="p-sealed-title">Time ran out.</p>
+          <p class="p-sealed-artist">The judge picked something for you. Own it.</p>
         </Show>
+      </div>
 
-        <p class="p-progress" role="status">
-          {progress()}
+      <div class="p-progress" role="status">
+        <ul class="p-slots" aria-hidden="true">
+          <For each={Array.from({ length: Math.max(m(), 1) }, (_, i) => i)}>
+            {(i) => <li classList={{ 'is-filled': i < n() }} />}
+          </For>
+        </ul>
+        <p class="p-progress-text">
+          <strong class="mono">
+            {n()}/{m()}
+          </strong>{' '}
+          locked · {props.chicken ? 'the show goes on' : statusLine()}
         </p>
-
-        <Show when={props.countdownSeconds() !== null && !props.chicken}>
-          <p class="p-countdown" role="timer">
-            {props.countdownSeconds()}s
-          </p>
-        </Show>
-
-        <div class="p-peer-dots" aria-hidden="true">
-          <For each={[0, 1, 2]}>{(i) => <span class="p-peer-dot" data-n={String(i)} />}</For>
-        </div>
-
-        <p class="p-hint">{props.chicken ? 'own it. reveal will be glorious.' : statusLine()}</p>
       </div>
     </div>
   );

@@ -1,12 +1,25 @@
 node_modules/
 dist/
+dist-app/
 coverage/
-package-lock.json
 *.log
 .env
+.env.*
+!.env.example
+# Mobile build config is comments/public origins only and is meant to be shared.
+!apps/web/.env.mobile
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
 .DS_Store
 *.tsbuildinfo
 var/
+dist-mobile/
+ios.release.json
+ios/Release.local.xcconfig
+ios/App/App/public/
+ios/App/App/capacitor.config.json
+ios/App/App/config.xml
+# Purchased audio and license documents belong in protected deployment storage,
+# not source control. The schema-only example lives under docs/.
+licensed-music/

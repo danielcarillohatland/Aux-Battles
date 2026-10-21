@@ -99,6 +99,16 @@ describe('POST /api/v1/rooms', () => {
     });
     expectErrorEnvelope(res, 400);
   });
+
+  it('accepts a truly empty request without any content-type at all', async () => {
+    // Create Room requires no payload. NOTE: Fastify core rejects
+    // `application/json` + empty body with FST_ERR_CTP_EMPTY_JSON_BODY before
+    // our handler runs — by contract, the CLIENT must not send that header
+    // for bodyless posts (fixed in host/api.ts; regression covered there).
+    const res = await app.inject({ method: 'POST', url: `${API}/rooms` });
+    expect(res.statusCode).toBe(201);
+    expect((res.json() as { data?: { code?: string } }).data?.code).toHaveLength(ROOM_CODE_LENGTH);
+  });
 });
 
 // ── Join flow ────────────────────────────────────────────────────────────────
@@ -165,10 +175,11 @@ describe('GET /api/v1/rooms/:code/snapshot', () => {
     expect(snap.hostNickname).toBe(HOST_DEFAULT_NICKNAME);
     const players = snap.players as Array<{ nickname: string; connected: boolean }>;
     const nicks = players.map((p) => p.nickname);
-    expect(nicks).toContain(HOST_DEFAULT_NICKNAME);
+    expect(snap.hostNickname).toBe(HOST_DEFAULT_NICKNAME);
+    expect(nicks).not.toContain(HOST_DEFAULT_NICKNAME);
     expect(nicks).toContain('Sam');
     expect(nicks).toContain('Bob');
-    expect(players.length).toBe(3);
+    expect(players.length).toBe(2);
     for (const p of players) expect(p.connected).toBe(true);
   });
 

@@ -21,6 +21,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import WebSocket from 'ws';
 import { ServerFrameSchema } from '@aux/shared';
 import { RoomManager } from '../src/core/room-manager.js';
+import { hashToken, mintToken } from '../src/core/tokens.js';
 import { initWsHub, type WsHub } from '../src/ws/index.js';
 
 interface Ctx {
@@ -222,6 +223,40 @@ describe('connect tickets (POST /api/v1/ws-ticket)', () => {
 });
 
 describe('upgrade gate (/ws)', () => {
+  it('revokes outstanding tickets when their session token is rotated', async () => {
+    const host = makeSession('host');
+    const ticket = await ticketFor(host);
+    const rotated = mintToken();
+    ctx.rooms.get(host.code)!.players.get(host.playerId)!.tokenHash = hashToken(rotated);
+
+    const stale = dial(host, { ticket });
+    expect((await stale.closed).code).toBe(403);
+    expect(ctx.wsHub.connectionCount(host.code)).toBe(0);
+
+    const freshSession = { ...host, token: rotated };
+    const fresh = dial(freshSession, { ticket: await ticketFor(freshSession) });
+    const frame = ((await fresh.waitFor(1))[0] ?? {}) as TestFrame;
+    expect(frame.snapshot).toMatchObject({ you: { role: 'host' } });
+    expect(JSON.stringify(frame)).not.toContain(hashToken(rotated));
+  });
+
+  it('uses the current host role if ownership changes after a ticket is issued', async () => {
+    const host = makeSession('host');
+    const player = makeSession('player', host.code);
+    const hostTicket = await ticketFor(host);
+    const playerTicket = await ticketFor(player);
+    ctx.rooms.get(host.code)!.hostPlayerId = player.playerId;
+
+    const formerHost = dial(host, { ticket: hostTicket });
+    const newHost = dial(player, { ticket: playerTicket });
+    const [formerFrames, newFrames] = await Promise.all([
+      formerHost.waitFor(1),
+      newHost.waitFor(1),
+    ]);
+    expect(formerFrames[0]).toMatchObject({ snapshot: { you: { role: 'player' } } });
+    expect(newFrames[0]).toMatchObject({ snapshot: { you: { role: 'host' } } });
+  });
+
   it('rejects a missing ticket', async () => {
     const host = makeSession('host');
     const d = dial(host, { query: `room=${host.code}` });
@@ -287,12 +322,12 @@ describe('push stream', () => {
     expect((hf[2] as TestFrame | undefined)?.seq).toBe(hSeq + 1);
     expect(ServerFrameSchema.safeParse(hf[2]).success).toBe(true);
 
-    // A fresh connection continues the SAME ladder: host=1, player=2,
-    // submission_received=3, playback_cue=4 → this snapshot is seq 5.
+    // A private handshake snapshot reports the current room sequence without
+    // advancing it (otherwise existing viewers would see a false gap).
     const fresh = makeSession('player', host.code);
     const df = dial(fresh, { ticket: await ticketFor(fresh) });
     const f1 = ((await df.waitFor(1))[0] ?? {}) as TestFrame;
-    expect((f1 as TestFrame).seq).toBe(5);
+    expect((f1 as TestFrame).seq).toBe(3);
     df.socket.close();
     dh.socket.close();
     dp.socket.close();
@@ -328,6 +363,29 @@ describe('push stream', () => {
 });
 
 describe('supersession & lifecycle', () => {
+  it('refreshes active socket roles and host-only routing after host succession', async () => {
+    const host = makeSession('host');
+    const player = makeSession('player', host.code);
+    const dh = dial(host, { ticket: await ticketFor(host) });
+    const dp = dial(player, { ticket: await ticketFor(player) });
+    await Promise.all([dh.waitFor(1), dp.waitFor(1)]);
+
+    // This is the authoritative mutation made by the host grace timer. Neither
+    // socket reconnects, including a returning former host's existing session.
+    ctx.rooms.get(host.code)!.hostPlayerId = player.playerId;
+    ctx.wsHub.broadcastStateChange(host.code);
+    const [oldFrames, newFrames] = await Promise.all([dh.waitFor(2), dp.waitFor(2)]);
+    expect(oldFrames[1]).toMatchObject({ snapshot: { you: { role: 'player' } } });
+    expect(newFrames[1]).toMatchObject({ snapshot: { you: { role: 'host' } } });
+
+    ctx.wsHub.toHosts(host.code, { t: 'playback_cue' });
+    // A shared frame fences delivery so the negative assertion needs no sleep.
+    ctx.wsHub.publish(host.code, { t: 'submission_received', count: 1 });
+    await Promise.all([dh.waitFor(3), dp.waitFor(4)]);
+    expect(dh.frames.some((frame) => (frame as TestFrame).t === 'playback_cue')).toBe(false);
+    expect(dp.frames.some((frame) => (frame as TestFrame).t === 'playback_cue')).toBe(true);
+  });
+
   it('a second socket for the same player supersedes the first (close 4001)', async () => {
     const host = makeSession('host');
     const first = dial(host, { ticket: await ticketFor(host) });
@@ -410,7 +468,7 @@ describe('supersession & lifecycle', () => {
         state: 'SONG_SELECTION',
         roundIdx: 2,
         phaseEndsAt: 12345,
-        playbackMode: 'api',
+        playbackMode: 'catalog',
         players: [],
         submissionsCount: 7,
         you: { role: viewer.role, hasSubmitted: true, nickname: viewer.nickname },

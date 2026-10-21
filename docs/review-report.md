@@ -1,5 +1,7 @@
 # AUX BATTLES — Independent Design Review (Agent 6)
 
+> **Historical design document (August 2026).** Kept for decision history. Parts no longer match the shipped system (Spotify, Postgres/Drizzle, Playwright, "no accounts or payments"). Current sources: [README](../README.md), [TDD](TDD.md), [DECISIONS](DECISIONS.md), [AI judge](ai-judge.md), [billing](billing.md), [DEPLOY](../DEPLOY.md).
+
 Reviewer: Independent Reviewer · Date: 2026-08-24 · Inputs: all 6 specialist docs read in full.
 
 ## 1. Per-document verdicts

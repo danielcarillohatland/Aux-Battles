@@ -1,7 +1,7 @@
 # AUX BATTLES — Technical Design Document (MVP)
 
-**Status:** v1.1 — **APPROVED** by product owner 2026-08-24 · canonical spec for implementation · Review ruling: GO-WITH-CONDITIONS (all 6 conditions baked in below; governance additions in `DECISIONS.md` D-008…D-014)
-**Sources:** `architecture.md` · `backend-spec.md` · `frontend-spec.md` · `../aux-battles-spotify-deep-dive.md` · `testing-strategy.md` · `security-review.md` · `review-report.md`
+**Status:** v1.4 — amended 2026-09-01 by `DECISIONS.md` D-022
+**Sources:** `architecture.md` · `backend-spec.md` · `frontend-spec.md` · `apple-music.md` · `licensed-music.md` · `testing-strategy.md` · `security-review.md`
 Where a source doc conflicts with this document, **this document wins** (adjudications in §2).
 
 ---
@@ -9,7 +9,7 @@ Where a source doc conflicts with this document, **this document wins** (adjudic
 ## 1. Product Definition
 
 - Real-time social party game: players match songs to scenarios; an **AI Judge ranks every submission** — no player voting.
-- Host connects **their own Spotify Premium** (OAuth); all playback through the host's device. Players never touch Spotify.
+- Players can enter **any song title and artist** with no provider setup; the host opens it in a music service and controls Next.
 - Join = scan QR → type nickname → play. Target <15 s, zero installs, zero accounts.
 - Submissions are **anonymous** until after the reveal; server-side shuffling protects anonymity.
 - Signature moment: the **reveal** — worst-to-best countdown with witty AI explanations, then owners, leaderboard, next round.
@@ -24,7 +24,7 @@ Where a source doc conflicts with this document, **this document wins** (adjudic
 | D-B | **Persistence**: authoritative in-memory rooms + **SQLite (WAL)** checkpoints behind `RoomStore` | Architecture wins for MVP | Postgres/Drizzle becomes the stage-1 scale swap (config change, not surgery). Backend's integrity model survives: port unique constraints into SQLite (§6) so the DB stays the race backstop |
 | D-C | **Timers**: ONE `setTimeout` per room while a timed phase is armed; `phase_deadline` persisted (epoch-ms); expiry re-enters FSM through the room mutex as `TIMER_EXPIRED`; boot sweep re-arms overdue deadlines; ~60s interval sweeper for TTL/cleanup only | Backend wins | Arch's global 1s ticker deleted as state-advancer (idle rooms hold zero timers; Node handles hundreds trivially) |
 | D-D | **Protocol**: REST for ALL mutations; WebSocket read-mostly (`ping/ack` only). Frame envelope `{t, ts, seq}`; full-snapshot resync via fresh handshake; rejoin via `/reclaim` ticket | Backend wins | Frontend §3 sketch rewritten (its invented `vote/lock/ready/resync` frames and event vocabulary dropped). Heartbeat = **15s** |
-| D-E | **Playback modes**: `playback_mode: 'api' \| 'manual' \| 'silent'` broadcast in every snapshot. **Manual mode is first-class, host-tap-driven** (host taps “Next” between tracks; round clock pauses between tracks) | Deep-dive endorsed + extended | Previews presumed dead in Dev Mode; `previewOnly` cue path demoted to day-one probe. Frontend gains manual-mode card/banner |
+| D-E | **Playback modes**: `playback_mode: 'catalog' \| 'manual' \| 'silent'`. Manual title/artist entry and service handoff is the zero-setup default; catalog mode optionally uses user-initiated Apple MusicKit playback or explicitly rights-cleared files. | D-022 | Spotify and undocumented OpenFM streams are excluded; AUX Originals are legacy/test-only. |
 | D-F | **Duplicate nicknames**: reject live duplicates (`NAME_TAKEN`); disconnected players' names reclaimable via `/reclaim`, which invalidates the old session token | Backend + Testing win | Auto-suffix `#2` policies (Arch, Frontend) deleted — suffix breaks stable reclaim identity |
 
 ## 3. System Architecture
@@ -40,7 +40,7 @@ Where a source doc conflicts with this document, **this document wins** (adjudic
 │              JudgeService (batched LLM, validated, fallback) │ MusicProvider iface   │
 └──────────────────────────────────────────────┬───────────────────────────────────────┘
                                                │ constructor-injected at composition root
-                                   SpotifyProvider (src/providers/)   FakeProvider (tests)
+                                   ApprovedMusicCatalog               In-memory catalog (tests)
 ```
 
 - **Topology:** one process owning REST + WS + rooms. No Redis, no queue, no second service. Rooms are node-local; stage-1 scale = run N processes behind a room-code-hash router + swap `RoomStore` to Postgres.
@@ -103,24 +103,21 @@ DB constraints are the **final arbiter** for races: constraint violation → map
 ## 7. MusicProvider Abstraction
 
 ```ts
-interface MusicProvider {
+interface ApprovedMusicCatalog {
   search(query: string, limit?: number): Promise<Track[]>;
   getTrack(id: string): Promise<Track>;
-  authenticateHost(): Promise<AuthResult>;            // OAuth PKCE, server-side
-  startPlayback(req: { uris: string[]; deviceId?: string; positionMs?: number }): Promise<void>;
-  pause(): Promise<void>; resume(): Promise<void>; next(): Promise<void>;
-  getActiveDevice(): Promise<Device | null>;
+  listTracks(): Track[];
+  playableTrack(id: string, roomCode: string): Track | null;
 }
 type ProviderError =
-  | 'DEVICE_OFFLINE' | 'NOT_PREMIUM' | 'RATE_LIMITED' | 'TOKEN_EXPIRED'
-  | 'TRACK_UNPLAYABLE' | 'NO_ACTIVE_DEVICE' | 'PROVIDER_DOWN';
+  | 'TRACK_UNPLAYABLE' | 'CATALOG_DOWN';
 ```
 
-- Lives in `src/core/`; Spotify impl quarantined in `src/providers/spotify/`. Engine imports the interface **only**. Tests use `FakeProvider`.
-- **Spotify reality (Feb 2026 Dev Mode):** app capped at 5 allowlisted users — irrelevant here since only the host OAuths; owner Premium mandatory (lapse = outage; checklist item); search `limit≤10`; batch fetches removed; `/me` no longer exposes Premium status → cannot programmatically verify; previews presumed dead (day-one probe decides).
-- **OAuth:** Authorization Code + PKCE server-side; refresh tokens encrypted at rest; proactive refresh at T-120s; `invalid_grant` → re-auth prompt.
-- **Fallback ladder:** L0 full API autoplay → … → L4 **Manual** (app shows song cards; host plays on phone/Spotify app; taps Next; clock pauses between tracks — *first-class, tested*) → L5 silent (judge-only karaoke-text mode). Circuit breaker on 429 storms honoring `Retry-After`.
-- Round orchestration: preload entire round queue in ONE `startPlayback` call; verify-don't-drive polling (5–10 s); device-loss grace window mid-round.
+- Lives in `src/providers/`; game logic imports the interface **only**. Tests use in-memory catalogs.
+- **Default:** player-entered title/artist metadata is canonicalized by the server; host-facing external search links provide manual playback without provider credentials.
+- **Apple Music:** the server uses a developer token for canonical catalog search. The authenticated host receives a no-store MusicKit configuration, authorizes their Apple Music account, and initiates playback with standard controls.
+- **Rights boundary:** Apple renders DRM-protected audio; AUX BATTLES never proxies or persists it. No previews, timed autoplay, editing, mixing, recording, or sharing.
+- **Fallback:** an Open-in-Apple-Music link supports manual playback. The Next action is always available, even when authorization or playback fails.
 
 ## 8. AI Judge
 
@@ -149,14 +146,14 @@ type ProviderError =
 4. Global LLM budget cap + provider spend cap.
 5. Rate limits: room-create, join (per-IP + lockout), submissions, search proxy. In-memory.
 6. Same-origin CORS; WS Origin check; **connect-ticket** instead of token-in-query-string.
-7. Env-only secrets; PKCE; minimal Spotify scopes; encrypted token store.
+7. Env-only secrets; the MusicKit private key never leaves deployment tooling; developer-token responses are host-authenticated and `no-store`.
 8. Graceful judge degradation (rooms never hang on LLM).
 Deferred (documented): WAF, distributed rate limiting, CSRF machinery, accounts/MFA — no ambient credentials by design. Residual worst case: one biased ranking + capped budget waste. Acceptable.
 
 ## 11. Testing
 
 - **Unit (dominant):** table-driven FSM matrices incl. illegal transitions; judge prompt-build/parse; code-gen; timer arming. Property tests (fast-check): judgement permutation/coverage/clamps — **run against the fallback judge too**.
-- **Integration (heavyweight):** real server + tmpfile SQLite + `FakeProvider` + `FakeLLM` (never real OpenAI/Spotify in CI). Hard cases as recipes with assertions: simultaneous submissions race, reconnect mid-reveal (state replay), host refresh mid-round (token reclaim + pause), duplicate nickname, late join mid-selection, room expiry with live sockets, **manual-mode round** (host-driven advance, paused clock, intact results), anonymity shuffle.
+- **Integration (heavyweight):** real server + tmpfile SQLite + fake catalog + `FakeLLM` (never real OpenAI/Apple Music in CI). Hard cases as recipes with assertions: simultaneous submissions race, reconnect mid-reveal (state replay), host refresh mid-round (token reclaim + pause), duplicate nickname, late join mid-selection, room expiry with live sockets, **manual-mode round** (host-driven advance, paused clock, intact results), anonymity shuffle.
 - **E2E (thin):** 2 Playwright flows, multi-context (1 host + 8 player contexts): happy-path smoke; host-refresh chaos.
 - **Load:** k6 — 50 rooms × 8 players = playtest de-risk gate; 500×8 headroom variant; bursty submission windows; fan-out latency thresholds; churn/zombie-room variants.
 
@@ -180,7 +177,7 @@ aux-battles/
 | **0** | Repo scaffold, `@aux/shared`, CI, security 🔴 skeleton, docs amended per §2 | CI green |
 | **1** | Landing, create room, QR, join, lobby | join <15 s on real phones |
 | **2** | WS realtime, full FSM + timers, host controls, reconnect/reclaim | integration hard-case suite green |
-| **2.5 SPIKE** | **Spotify preload-and-verify orchestrator behind `MusicProvider`**; day-one probes (preview_url, transfer latency, rate ceiling); **L0 and L4 both demo-able** | demo passes before any reveal polish |
+| **2.5 MUSIC** | **Zero-setup manual song entry and handoff** plus optional Apple Music catalog/MusicKit playback; provider failure never disables Next | no-provider and catalog modes demo-able |
 | **3** | Anonymous submissions, round flow, shuffle anonymity | concurrency tests green |
 | **4** | AI Judge (schema+validation+fallback), reveal choreography, leaderboard | judge property tests green; reveal feels great |
 | **5** | Polish, k6 load gate, deploy (Fly.io single app + SQLite volume, WSS) | playtest party survived |

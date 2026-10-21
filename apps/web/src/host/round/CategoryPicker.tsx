@@ -1,25 +1,10 @@
 /**
- * AUX BATTLES — host round flow, CATEGORY step (frontend-spec §2).
- * Grid of preset categories + free-text override. Picking one arms the
- * Lock button; locking dispatches PICK_CATEGORY via REST (D-D) and the FSM
- * moves the room to SCENARIO — the UI just reflects whatever the snapshot says.
- *
- * Presentational only: zero animation delays (owner condition #10); all
- * mutation flows upward through onPick.
+ * CATEGORY step (D-029): pick a vibe. A grid of vibe tickets plus a free-text
+ * prompt. Locking dispatches PICK_CATEGORY via REST (D-D) with the vibe id, the
+ * surprise sentinel, or the custom prompt; the server draws the scene.
  */
 import { createSignal, For } from 'solid-js';
-
-/** Party-tested presets — tap-to-pick chips under the free-text box. */
-export const PRESET_CATEGORIES = [
-  'breakup anthems',
-  'one-hit wonders',
-  'songs for the gym',
-  'rainy day',
-  'road trip',
-  '90s nostalgia',
-  'karaoke killers',
-  'villain era',
-] as const;
+import { SCENARIO_THEMES, SURPRISE_THEME_ID } from '@aux/shared';
 
 export interface CategoryPickerProps {
   busy: boolean;
@@ -30,53 +15,77 @@ export const CategoryPicker = (props: CategoryPickerProps) => {
   const [text, setText] = createSignal('');
   const [preset, setPreset] = createSignal<string | null>(null);
 
-  /** Free-text wins whenever it has content; otherwise the chosen preset. */
   const chosen = (): string | undefined => {
     const t = text().trim();
     return t !== '' ? t : (preset() ?? undefined);
   };
-
   const lock = () => {
     const c = chosen();
     if (c !== undefined && !props.busy) props.onPick(c);
   };
+  const select = (id: string) => {
+    setText('');
+    setPreset(id);
+  };
 
   return (
-    <div class="round-card category-picker" role="group" aria-label="Pick a category">
-      <h2 class="round-heading">pick a category</h2>
-      <input
-        class="p-input"
-        placeholder="or type your own…"
-        value={text()}
-        onInput={(e) => setText(e.currentTarget.value)}
-        maxLength={40}
-        aria-label="Custom category"
-      />
-      <div class="category-grid">
-        <For each={[...PRESET_CATEGORIES]}>
-          {(c) => (
+    <section class="screen vibes" role="group" aria-label="Pick a vibe">
+      <p class="kicker">Round setup</p>
+      <h2 class="display">Pick a vibe</h2>
+      <div class="vibe-grid">
+        <For each={[...SCENARIO_THEMES]}>
+          {(theme, i) => (
             <button
               type="button"
-              class="cat-chip"
-              classList={{ selected: preset() === c && text().trim() === '' }}
-              onClick={() => {
-                setText('');
-                setPreset(c);
-              }}
+              class="vibe rise"
+              style={{ 'animation-delay': `${i() * 40}ms` }}
+              classList={{ 'is-selected': preset() === theme.id && text().trim() === '' }}
+              aria-pressed={preset() === theme.id && text().trim() === ''}
+              onClick={() => select(theme.id)}
             >
-              {c}
+              <span class="vibe-emoji" aria-hidden="true">
+                {theme.emoji}
+              </span>
+              <span class="vibe-name">{theme.name}</span>
+              <span class="vibe-tagline">{theme.tagline}</span>
             </button>
           )}
         </For>
+        <button
+          type="button"
+          class="vibe vibe--surprise rise"
+          classList={{ 'is-selected': preset() === SURPRISE_THEME_ID && text().trim() === '' }}
+          aria-pressed={preset() === SURPRISE_THEME_ID && text().trim() === ''}
+          onClick={() => select(SURPRISE_THEME_ID)}
+        >
+          <span class="vibe-emoji" aria-hidden="true">
+            🎲
+          </span>
+          <span class="vibe-name">Surprise me</span>
+          <span class="vibe-tagline">Any vibe, any scene</span>
+        </button>
       </div>
-      <button
-        type="button"
-        class="btn-primary btn-start"
-        disabled={chosen() === undefined || props.busy}
-        onClick={lock}
-      >
-        {props.busy ? 'Locking…' : 'Lock Category ✓'}
-      </button>
-    </div>
+      <label class="vibe-custom">
+        <span class="kicker">Or write your own prompt</span>
+        <input
+          class="field"
+          placeholder="e.g. songs for grandma's 80th"
+          value={text()}
+          onInput={(e) => setText(e.currentTarget.value)}
+          maxLength={80}
+          aria-label="Custom prompt"
+        />
+      </label>
+      <div class="stage-cta">
+        <button
+          type="button"
+          class="btn btn--primary btn--big btn--block"
+          disabled={chosen() === undefined || props.busy}
+          onClick={lock}
+        >
+          {props.busy ? 'Locking…' : text().trim() !== '' ? 'Use my prompt' : 'Lock it in'}
+        </button>
+      </div>
+    </section>
   );
 };

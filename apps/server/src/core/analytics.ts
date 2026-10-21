@@ -7,7 +7,7 @@ import type { AnalyticsEvent } from '@aux/shared';
 
 export interface AnalyticsSink {
   write(record: AnalyticsEvent & { ts: number }): void;
-  flush?(): void;
+  flush?(): void | Promise<void>;
 }
 
 export class NdjsonAnalyticsSink implements AnalyticsSink {
@@ -33,9 +33,11 @@ export class NdjsonAnalyticsSink implements AnalyticsSink {
     }
   }
 
-  flush(): void {
-    this.stream?.end();
+  async flush(): Promise<void> {
+    const stream = this.stream;
     this.stream = null;
+    if (stream === null) return;
+    await new Promise<void>((resolve) => stream.end(resolve));
   }
 }
 
@@ -46,8 +48,8 @@ export class Analytics {
     this.sink.write({ ...event, ts: Date.now() });
   }
 
-  flush(): void {
-    this.sink.flush?.();
+  async flush(): Promise<void> {
+    await this.sink.flush?.();
   }
 }
 

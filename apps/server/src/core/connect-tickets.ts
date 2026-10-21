@@ -25,6 +25,8 @@ export type WsRole = 'host' | 'player';
 export interface TicketGrant {
   code: string;
   playerId: string;
+  /** Server-only binding; a session rotation also revokes outstanding tickets. */
+  tokenHash: string;
   role: WsRole;
   nickname: string | null;
 }
@@ -66,6 +68,7 @@ export class ConnectTicketStore {
     const grant: TicketGrant = {
       code: stored.code,
       playerId: stored.playerId,
+      tokenHash: stored.tokenHash,
       role: stored.role,
       nickname: stored.nickname,
     };

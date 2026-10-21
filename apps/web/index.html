@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f7f5ee" />
+    <title>AUX BATTLES</title>
+    <link rel="stylesheet" href="/src/shared-ui/shell.css" />
+    <style>
+      body {
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        padding: calc(var(--safe-top) + 1.5rem) calc(var(--safe-right) + 1.5rem)
+          calc(var(--safe-bottom) + 1.5rem) calc(var(--safe-left) + 1.5rem);
+      }
+      main {
+        width: min(100%, 25rem);
+        display: grid;
+        gap: 0.9rem;
+        text-align: center;
+      }
+      .record {
+        display: grid;
+        place-items: center;
+        width: 10rem;
+        aspect-ratio: 1;
+        margin: 0 auto 1.5rem;
+        border: 6px solid #20221f;
+        border-radius: 50%;
+        background: repeating-radial-gradient(circle, #20221f 0 3px, #404238 4px, #20221f 5px 7px);
+        transform: rotate(-12deg);
+        box-shadow: 7px 8px 0 var(--peach);
+      }
+      .record span {
+        width: 45%;
+        aspect-ratio: 1;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: var(--cobalt);
+        color: var(--label-white);
+        font-family: var(--font-display);
+        font-size: 1.4rem;
+        font-weight: 800;
+      }
+      h1 {
+        font-size: clamp(3.1rem, 15vw, 4.7rem);
+        letter-spacing: -0.06em;
+        line-height: 0.92;
+        margin-bottom: 2rem;
+      }
+      h1 i {
+        color: var(--cobalt);
+        font-style: normal;
+      }
+      @media (orientation: landscape) and (max-height: 500px) {
+        main {
+          grid-template-columns: 1fr 1fr;
+          align-items: center;
+          max-width: 40rem;
+          width: 100%;
+        }
+        .record {
+          width: 6rem;
+          margin: 0 auto;
+        }
+        h1 {
+          margin: 0;
+          font-size: 2.6rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="record" aria-hidden="true"><span>AUX</span></div>
+      <h1>AUX<i>/</i><br />BATTLES</h1>
+      <a class="btn btn--primary btn--big" href="/host.html">Host a game</a>
+      <a class="btn btn--ghost btn--big" href="/player.html">Join a game</a>
+    </main>
+    <script>
+      const code = new URLSearchParams(location.search).get('code');
+      if (code) location.replace(`/player.html?code=${encodeURIComponent(code)}`);
+    </script>
+  </body>
+</html>
