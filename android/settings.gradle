@@ -1,0 +1,13 @@
+// Resolves JDK download URLs so `./gradlew updateDaemonJvm` can pin the build
+// JVM (see gradle/gradle-daemon-jvm.properties). Gradle 8.14 cannot run on
+// JDK 25+ ("Unsupported class file major version 69"), so the daemon always
+// runs on a provisioned JDK 21 regardless of the machine's default Java.
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
+include ':app'
+include ':capacitor-cordova-android-plugins'
+project(':capacitor-cordova-android-plugins').projectDir = new File('./capacitor-cordova-android-plugins/')
+
+apply from: 'capacitor.settings.gradle'

@@ -27,6 +27,7 @@ import type { ServerFrame, Snapshot } from '@aux/shared';
 import { ConnectTicketStore, type TicketGrant } from '../core/connect-tickets.js';
 import { createRateLimiter, type RateLimiter } from '../core/rate-limit.js';
 import { verifyToken } from '../core/tokens.js';
+import { isAllowedWebSocketOrigin } from '../core/origins.js';
 import {
   CLOSE_BAD_FRAME,
   CLOSE_KICKED,
@@ -71,8 +72,19 @@ export async function initWsHub(app: FastifyInstance, deps: WsHubDeps): Promise<
     return seq;
   };
 
+  /**
+   * A handshake snapshot is private to the newly connected viewer, so it must
+   * not advance the shared room sequence. Otherwise every existing browser
+   * observes an artificial gap whenever somebody joins and reconnects.
+   */
+  const currentSeq = (code: string): number => {
+    const seq = seqByRoom.get(code) ?? 1;
+    seqByRoom.set(code, seq);
+    return seq;
+  };
+
   /** Token → identity, or null. Constant-time hash compare (tokens.ts). */
-  function authenticate(code: string, token: string): WsViewer | null {
+  function authenticate(code: string, token: string): (WsViewer & { tokenHash: string }) | null {
     if (!RoomCodeSchema.safeParse(code).success) return null;
     const room = roomManager.get(code);
     if (room === undefined) return null;
@@ -80,6 +92,7 @@ export async function initWsHub(app: FastifyInstance, deps: WsHubDeps): Promise<
       if (verifyToken(token, player.tokenHash)) {
         return {
           playerId,
+          tokenHash: player.tokenHash,
           role: playerId === room.hostPlayerId ? 'host' : 'player',
           nickname: player.nickname,
         };
@@ -104,7 +117,7 @@ export async function initWsHub(app: FastifyInstance, deps: WsHubDeps): Promise<
       state: 'LOBBY',
       roundIdx: 0,
       phaseEndsAt: null,
-      playbackMode: 'manual', // D-E default mode
+      playbackMode: 'catalog',
       players: base.players,
       submissionsCount: 0,
       you: { role: viewer.role, hasSubmitted: false, nickname: viewer.nickname },
@@ -112,7 +125,19 @@ export async function initWsHub(app: FastifyInstance, deps: WsHubDeps): Promise<
   }
 
   function snapshotFor(code: string, viewer: WsViewer): Snapshot | null {
-    return deps.buildSnapshot ? deps.buildSnapshot(code, viewer) : defaultSnapshot(code, viewer);
+    const room = roomManager.get(code);
+    const member = room?.players.get(viewer.playerId);
+    if (room === undefined || member === undefined) return null;
+    // Host succession can happen while a player's socket stays connected.
+    // Resolve current authority for every snapshot, not just at the handshake.
+    const currentViewer: WsViewer = {
+      playerId: viewer.playerId,
+      role: room.hostPlayerId === viewer.playerId ? 'host' : 'player',
+      nickname: member.nickname,
+    };
+    return deps.buildSnapshot
+      ? deps.buildSnapshot(code, currentViewer)
+      : defaultSnapshot(code, currentViewer);
   }
 
   /** Post-init override for tests / controller FSM wiring (Phase 3 replaces the default). */
@@ -273,6 +298,7 @@ export async function initWsHub(app: FastifyInstance, deps: WsHubDeps): Promise<
     const ticket = tickets.issue({
       code: code.data,
       playerId: viewer.playerId,
+      tokenHash: viewer.tokenHash,
       role: viewer.role,
       nickname: viewer.nickname,
     });
@@ -299,29 +325,36 @@ export async function initWsHub(app: FastifyInstance, deps: WsHubDeps): Promise<
 
     // Identity was fixed at mint time, but the world may have moved on since.
     const room = roomManager.get(code);
-    if (room === undefined || !room.players.has(grant.playerId)) {
+    const member = room?.players.get(grant.playerId);
+    if (room === undefined || member === undefined) {
       void reply.code(404).send(apiError('ROOM_NOT_FOUND', 'no such room'));
+      return;
+    }
+    if (member.tokenHash !== grant.tokenHash) {
+      void reply
+        .code(403)
+        .send(apiError('NOT_AUTHENTICATED', 'session changed; request a new ticket'));
       return;
     }
 
     // WS Origin check (security baseline #6): browsers always send Origin on
     // WS dials; non-browser clients may omit it. Cross-origin upgrades die here.
-    const origin = req.headers.origin;
-    if (typeof origin === 'string') {
-      let originHost: string | null = null;
-      try {
-        originHost = new URL(origin).host;
-      } catch {
-        originHost = null;
-      }
-      const hostHeader = req.headers.host ?? '';
-      if (originHost !== null && hostHeader !== '' && originHost !== hostHeader) {
-        void reply.code(403).send(apiError('NOT_AUTHENTICATED', 'cross-origin websocket refused'));
-        return;
-      }
+    if (
+      !isAllowedWebSocketOrigin(
+        req.headers.origin,
+        req.headers.host,
+        deps.allowedOrigins ?? new Set(),
+      )
+    ) {
+      void reply.code(403).send(apiError('NOT_AUTHENTICATED', 'cross-origin websocket refused'));
+      return;
     }
 
-    grants.set(req, grant);
+    grants.set(req, {
+      ...grant,
+      role: room.hostPlayerId === grant.playerId ? 'host' : 'player',
+      nickname: member.nickname,
+    });
   }
 
   app.get('/ws', { websocket: true, preValidation: handshake }, (socket, req) => {
@@ -337,8 +370,13 @@ export async function initWsHub(app: FastifyInstance, deps: WsHubDeps): Promise<
       dropConn(conn.code, conn.playerId, conn);
       return;
     }
-    const initial = stamp(conn.code, { t: 'state_change', snapshot: snap });
-    if (initial !== null) send(conn, initial);
+    const initial = {
+      t: 'state_change',
+      ts: Date.now(),
+      seq: currentSeq(conn.code),
+      snapshot: snap,
+    } as ServerFrame;
+    if (ServerFrameSchema.safeParse(initial).success) send(conn, initial);
 
     socket.on('message', (raw: unknown) => {
       conn.lastSeenAt = Date.now();
@@ -390,8 +428,9 @@ export async function initWsHub(app: FastifyInstance, deps: WsHubDeps): Promise<
     },
 
     toHosts(code: string, frame: PushFrame): void {
+      const hostPlayerId = roomManager.get(code)?.hostPlayerId;
       pushTo(
-        [...connsOf(code)].filter((c) => c.viewer.role === 'host'),
+        [...connsOf(code)].filter((c) => c.playerId === hostPlayerId),
         code,
         frame,
       );
@@ -420,6 +459,12 @@ export async function initWsHub(app: FastifyInstance, deps: WsHubDeps): Promise<
       let n = 0;
       for (const roomConns of rooms.values()) n += roomConns.size;
       return n;
+    },
+
+    snapshotFor(code: string, playerId: string): Snapshot | null {
+      const member = roomManager.get(code)?.players.get(playerId);
+      if (member === undefined) return null;
+      return snapshotFor(code, { playerId, role: 'player', nickname: member.nickname });
     },
 
     setSnapshotBuilder,

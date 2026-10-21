@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "licensee": "Your legal publisher name",
+  "tracks": [
+    {
+      "id": "party-one",
+      "title": "Party One",
+      "artist": "Example Artist",
+      "album": "Example Album",
+      "description": "Bright celebratory pop with a fast pulse and a confident sing-along lift.",
+      "durationMs": 184000,
+      "audioFile": "audio/party-one.mp3",
+      "credit": "Party One — Example Artist, used under license",
+      "license": {
+        "source": "Jamendo Licensing",
+        "reference": "YOUR-ORDER-OR-LICENSE-ID",
+        "evidenceFile": "licenses/party-one-license.pdf",
+        "territories": "worldwide",
+        "gameAndAppUse": true,
+        "appStoreDistribution": true,
+        "commercialUse": true
+      }
+    }
+  ]
+}

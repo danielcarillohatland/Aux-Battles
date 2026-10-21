@@ -11,7 +11,7 @@
  * (TDD §8). The FSM never knows a judge exists.
  */
 import type { FsmState } from '@aux/shared';
-import { AI_JUDGING_TIMEOUT_MS, SCENARIO_DISPLAY_MS, SONG_SELECTION_MS } from '@aux/shared';
+import { SCENARIO_DISPLAY_MS, SONG_SELECTION_MS } from '@aux/shared';
 import type { FsmEvent, TransitionPayload } from './types.js';
 
 type Target = FsmState | ((payload: TransitionPayload) => FsmState);
@@ -43,5 +43,4 @@ export const TRANSITIONS: Readonly<Record<FsmState, Partial<Record<FsmEvent, Tar
 export const DEFAULT_PHASE_DURATIONS: Readonly<Partial<Record<FsmState, number>>> = {
   SCENARIO: SCENARIO_DISPLAY_MS,
   SONG_SELECTION: SONG_SELECTION_MS,
-  AI_JUDGING: AI_JUDGING_TIMEOUT_MS,
 };

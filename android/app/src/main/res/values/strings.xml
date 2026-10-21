@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">AUX Battles</string>
+    <string name="title_activity_main">AUX Battles</string>
+    <string name="package_name">com.auxbattles.game</string>
+    <string name="custom_url_scheme">com.auxbattles.game</string>
+</resources>

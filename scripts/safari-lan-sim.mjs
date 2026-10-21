@@ -31,9 +31,12 @@ const ticketed = await j(
 console.log('2. ticket minted');
 
 // Safari on the LAN page sends Origin: http://192.168.0.122:5173
-const ws = new WebSocket(`ws://192.168.0.122:5173/ws?room=${created.code}&ticket=${ticketed.ticket}`, {
-  headers: { origin: ORIGIN },
-});
+const ws = new WebSocket(
+  `ws://192.168.0.122:5173/ws?room=${created.code}&ticket=${ticketed.ticket}`,
+  {
+    headers: { origin: ORIGIN },
+  },
+);
 let opened = false;
 const timer = setTimeout(() => {
   console.log('RESULT: socket never opened → upgrade rejected at/before Fastify');

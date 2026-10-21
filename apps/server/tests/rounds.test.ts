@@ -7,7 +7,7 @@
  *    token → 200/201; repeat (different song) → 409 ALREADY_SUBMITTED; SAME
  *    clientMsgId replay → the ORIGINAL result, idempotently; non-member token
  *    → 401; submit during LOBBY → 409 INVALID_ACTION.
- *  - GET /api/v1/search?q=… member-auth → {ok,data:{tracks}} with ≤10 tracks.
+ *  - GET /api/v1/search?q=… member-auth → {ok,data:{tracks}} with ≤20 tracks.
  *  - Anonymity: `submission_received` WS frames carry COUNT ONLY — no
  *    nickname/playerId anywhere in the raw frame payload (TDD §7).
  *  - Races: 8 parallel submits (distinct players) all succeed with counts
@@ -19,7 +19,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket, { type RawData } from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/index.js';
-import { TrackSchema } from '@aux/shared';
+import { AUX_ORIGINAL_TRACKS, TrackSchema } from '@aux/shared';
 
 const API = '/api/v1';
 
@@ -49,6 +49,7 @@ beforeAll(async () => {
     LOG_LEVEL: 'error',
     AUX_DEV_MODE: '0',
     AUX_DB_FILE: ':memory:',
+    AUX_ENABLE_ORIGINALS: '1',
   }));
 
   const roundsWired = hasErrorEnvelope(
@@ -140,7 +141,13 @@ function makeTrack(title: string): {
   durationMs: number;
 } {
   trackSeq += 1;
-  return { id: `fixture-track-${trackSeq}`, title, artist: 'Test Artist', durationMs: 200_000 };
+  const approved = AUX_ORIGINAL_TRACKS[(trackSeq - 1) % AUX_ORIGINAL_TRACKS.length]!;
+  return {
+    id: approved.id,
+    title,
+    artist: 'Tampered client metadata',
+    durationMs: approved.durationMs,
+  };
 }
 
 function submit(
@@ -234,7 +241,7 @@ describe('GET /api/v1/search', () => {
     expectError(res, 401, 'NOT_AUTHENTICATED');
   });
 
-  it('returns {ok,data:{tracks}} capped at 10 for a member', async () => {
+  it('returns {ok,data:{tracks}} capped at 20 for a member', async () => {
     const { hostToken } = await createRoom();
 
     const res = await app.inject({
@@ -245,7 +252,7 @@ describe('GET /api/v1/search', () => {
     const d = expectOk(res);
     const tracks = d.tracks as unknown[];
     expect(Array.isArray(tracks)).toBe(true);
-    expect(tracks.length).toBeLessThanOrEqual(10);
+    expect(tracks.length).toBeLessThanOrEqual(20);
     for (const t of tracks) expect(TrackSchema.safeParse(t).success).toBe(true);
   });
 

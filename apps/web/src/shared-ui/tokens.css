@@ -1,0 +1,114 @@
+/*
+ * AUX BATTLES — record shop palette.
+ * Warm paper, crisp ink, cobalt labels, and coral record sleeves.
+ * Semantic surfaces keep every game phase consistently light.
+ * Both apps import this file first.
+ */
+:root {
+  /* Semantic surfaces and type */
+  --canvas: #f7f5ee;
+  --surface: #fffefa;
+  --surface-alt: #efeee7;
+  --text: #23241f;
+  --text-muted: #5b5d56;
+  --text-subtle: #6c6e66;
+  --line: #dcded2;
+  --line-strong: #bfc2b5;
+  --cobalt: #304bc7;
+  --coral: #d95734;
+  --peach: #f1c7af;
+  --pink: #ead5e3;
+  --label-white: #fffefa;
+
+  /* Illustration ink */
+  --ink-950: #10131f;
+  --ink-900: #171c2b;
+  --ink-800: #202738;
+  --ink-700: #313a4d;
+  --ink-600: #4d596f;
+  --ink-500: #8893a6;
+  --ink-300: #b2baca;
+
+  /* Type */
+  --cream: #f6f3e9;
+  --cream-dim: #d4d6db;
+  --paper-ink: #5b5d56;
+  --blush: #ead5e3;
+
+  /* Brand */
+  --aux: #304bc7;
+  --aux-deep: #243aa1;
+  --aux-soft: #eef0fc;
+  --lime: #304bc7;
+  --lime-deep: #243aa1;
+  --lime-soft: #eef0fc;
+
+  /* Semantic */
+  --good: #216c50;
+  --warn: #935610;
+  --bad: #b62d40;
+
+  /* Shape */
+  --radius-s: 4px;
+  --radius-m: 10px;
+  --radius-l: 16px;
+  --rule: 1px solid var(--line);
+
+  /* Type scale */
+  --font-display:
+    'Bricolage Grotesque', 'Avenir Next Condensed', 'Helvetica Neue', system-ui, sans-serif;
+  --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --step--1: clamp(0.78rem, 0.74rem + 0.2vw, 0.88rem);
+  --step-0: clamp(0.95rem, 0.9rem + 0.25vw, 1.05rem);
+  --step-1: clamp(1.15rem, 1.05rem + 0.5vw, 1.4rem);
+  --step-2: clamp(1.5rem, 1.3rem + 1vw, 2rem);
+  --step-3: clamp(2rem, 1.6rem + 2vw, 3rem);
+  --step-4: clamp(2.8rem, 2rem + 4vw, 4.6rem);
+  --step-5: clamp(3.6rem, 2.4rem + 6vw, 6.5rem);
+
+  /* Space */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  /* Safe areas */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.44, 1);
+  --dur-fast: 140ms;
+  --dur-base: 260ms;
+  --dur-slow: 480ms;
+}
+
+@font-face {
+  font-family: 'Bricolage Grotesque';
+  font-style: normal;
+  font-weight: 400 800;
+  font-stretch: 75% 100%;
+  font-display: swap;
+  src: url('/fonts/bricolage-3.woff2') format('woff2');
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Bricolage Grotesque';
+  font-style: normal;
+  font-weight: 400 800;
+  font-stretch: 75% 100%;
+  font-display: swap;
+  src: url('/fonts/bricolage-2.woff2') format('woff2');
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}

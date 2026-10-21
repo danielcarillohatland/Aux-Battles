@@ -35,6 +35,19 @@ export interface StoredSubmission {
   createdAt: number;
   /** True when the server auto-filled this at timer expiry (TDD §4 chicken 🐔). */
   chicken: boolean;
+  /** Player-written argument for the pick; sanitized, bounded, judge-visible (D-026). */
+  defense?: string;
+}
+
+/** Strip control characters, collapse whitespace, cap length; empty → undefined. */
+export function cleanDefense(value: string | undefined, max = 160): string | undefined {
+  if (value === undefined) return undefined;
+  const cleaned = value
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
+  return cleaned === '' ? undefined : cleaned;
 }
 
 export type SubmitStatus = 'stored' | 'replayed';
@@ -63,6 +76,7 @@ export interface SubmitInput {
   playerId: string;
   clientMsgId: string;
   track: Track;
+  defense?: string | undefined;
 }
 
 /** Checkpoint payload fragment (versioned for forward-compatible swaps). */
@@ -72,58 +86,12 @@ export interface SubmissionsPayload {
   rounds: Record<string, StoredSubmission[]>;
 }
 
-/**
- * Hardcoded 20-track party list for the spike's timer-expiry auto-fill
- * (chicken 🐔 picks). Popular, recognizable, family-safe. Swap for a
- * SearchProvider query in a later phase without touching call sites.
- */
-export const PARTY_TRACKS: readonly Track[] = [
-  { id: 'sp_party_01', title: 'Dancing Queen', artist: 'ABBA', durationMs: 231_000 },
-  { id: 'sp_party_02', title: 'Mr. Brightside', artist: 'The Killers', durationMs: 222_000 },
-  { id: 'sp_party_03', title: 'Shake It Off', artist: 'Taylor Swift', durationMs: 219_000 },
-  {
-    id: 'sp_party_04',
-    title: 'Uptown Funk',
-    artist: 'Mark Ronson ft. Bruno Mars',
-    durationMs: 270_000,
-  },
-  { id: 'sp_party_05', title: 'Bohemian Rhapsody', artist: 'Queen', durationMs: 355_000 },
-  { id: 'sp_party_06', title: 'Hey Ya!', artist: 'OutKast', durationMs: 245_000 },
-  {
-    id: 'sp_party_07',
-    title: 'I Wanna Dance with Somebody',
-    artist: 'Whitney Houston',
-    durationMs: 300_000,
-  },
-  { id: 'sp_party_08', title: 'September', artist: 'Earth, Wind & Fire', durationMs: 215_000 },
-  { id: 'sp_party_09', title: "Livin' on a Prayer", artist: 'Bon Jovi', durationMs: 250_000 },
-  { id: 'sp_party_10', title: "Don't Stop Believin'", artist: 'Journey', durationMs: 250_000 },
-  { id: 'sp_party_11', title: 'Blinding Lights', artist: 'The Weeknd', durationMs: 200_000 },
-  { id: 'sp_party_12', title: 'Levitating', artist: 'Dua Lipa', durationMs: 203_000 },
-  { id: 'sp_party_13', title: 'Sweet Caroline', artist: 'Neil Diamond', durationMs: 201_000 },
-  { id: 'sp_party_14', title: 'Wannabe', artist: 'Spice Girls', durationMs: 173_000 },
-  {
-    id: 'sp_party_15',
-    title: "Can't Stop the Feeling!",
-    artist: 'Justin Timberlake',
-    durationMs: 236_000,
-  },
-  { id: 'sp_party_16', title: 'Get Lucky', artist: 'Daft Punk', durationMs: 248_000 },
-  { id: 'sp_party_17', title: 'Rolling in the Deep', artist: 'Adele', durationMs: 228_000 },
-  { id: 'sp_party_18', title: 'Toxic', artist: 'Britney Spears', durationMs: 199_000 },
-  { id: 'sp_party_19', title: 'Crazy in Love', artist: 'Beyoncé ft. Jay-Z', durationMs: 236_000 },
-  { id: 'sp_party_20', title: 'Take On Me', artist: 'a-ha', durationMs: 225_000 },
-];
-
-function pickRandomTrack(): Track {
-  return PARTY_TRACKS[randomInt(PARTY_TRACKS.length)]!;
-}
-
 export class SubmissionStore {
   /** roundId → (playerId → submission), insertion-ordered. */
   private readonly byPlayer = new Map<string, Map<string, StoredSubmission>>();
   /** roundId → (clientMsgId → submission) — the idempotency index. */
   private readonly byMsg = new Map<string, Map<string, StoredSubmission>>();
+  private chickenTracks: readonly Track[] = [];
 
   /**
    * Controller seam (D-B): fired with the ROOM CODE after every mutation so the
@@ -132,6 +100,16 @@ export class SubmissionStore {
    * matching game-runtimes.ts persist() semantics.
    */
   onChanged: ((code: string) => void) | null = null;
+
+  /** Replace timer-expiry picks with the complete approved catalog. */
+  setChickenTracks(tracks: readonly Track[]): void {
+    this.chickenTracks = tracks.map((track) => ({ ...track }));
+  }
+
+  private pickRandomTrack(): Track | null {
+    if (this.chickenTracks.length === 0) return null;
+    return { ...this.chickenTracks[randomInt(this.chickenTracks.length)]! };
+  }
 
   private round(roundId: string): Map<string, StoredSubmission> {
     let m = this.byPlayer.get(roundId);
@@ -177,6 +155,8 @@ export class SubmissionStore {
       createdAt: now,
       chicken: false,
     };
+    const defense = cleanDefense(input.defense);
+    if (defense !== undefined) submission.defense = defense;
     players.set(input.playerId, submission);
     if (msgIndex === undefined) {
       this.byMsg.set(roundId, new Map([[input.clientMsgId, submission]]));
@@ -226,11 +206,13 @@ export class SubmissionStore {
     const filled: StoredSubmission[] = [];
     for (const playerId of playerIds) {
       if (players.has(playerId)) continue;
+      const track = this.pickRandomTrack();
+      if (track === null) continue;
       const clientMsgId = `chicken-${roundId}-${playerId}`;
       const submission: StoredSubmission = {
         roundId,
         playerId,
-        track: pickRandomTrack(),
+        track,
         clientMsgId,
         createdAt: now,
         chicken: true,

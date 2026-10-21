@@ -1,31 +1,30 @@
 /*
- * AUX BATTLES — Reveal choreography styles (host screen, spec §5).
- * Namespaced .rv-* to stay clear of host.css phase classes.
- * Beat engine contract: each entrance runs var(--beat-dur, 520ms), then the
- * component waits a fixed ≤600 ms before the next beat fires — so beats land
- * ≈1.1–1.2 s apart with dead air never exceeding 600 ms (owner condition #10).
- * Everything else here is either one-shot ≤600 ms or loops in place
- * (drumroll ring, heartbeat ghosts) without gating input.
+ * The Reveal (host RESULTS). Namespaced .rv-*. Each entrance runs
+ * var(--beat-dur), then the component waits ≤600 ms before the next beat.
  */
-
 .rv {
   position: relative;
-  width: min(880px, 94vw);
-  margin-top: clamp(1rem, 3vh, 2rem);
+  width: 100%;
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
+  gap: var(--space-4);
+  padding-bottom: var(--space-5);
   text-align: center;
-  gap: clamp(0.6rem, 2vh, 1.25rem);
+  touch-action: manipulation;
+  user-select: none;
+}
+.rv-progress {
+  color: var(--text-subtle);
 }
 
-/* Full-screen white flash on the winning beat. */
 .rv-flash {
   position: fixed;
   inset: 0;
   z-index: 40;
   pointer-events: none;
-  background: #fff;
+  background: var(--surface);
   animation: rv-flashout 420ms ease-out forwards;
 }
 @keyframes rv-flashout {
@@ -36,8 +35,6 @@
     opacity: 0;
   }
 }
-
-/* ── Screen shake (last-place slam) ──────────────────────────────────────── */
 
 .rv.do-shake {
   animation: rv-shake 500ms cubic-bezier(0.36, 0.07, 0.19, 0.97);
@@ -63,187 +60,146 @@
 }
 
 /* ── Drumroll ─────────────────────────────────────────────────────────────── */
-
 .rv-drumroll {
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: clamp(0.75rem, 2.5vh, 1.5rem);
+  justify-content: center;
+  gap: var(--space-4);
 }
-.rv-drum-ring {
-  width: clamp(96px, 16vw, 180px);
-  height: clamp(96px, 16vw, 180px);
+.rv-drum {
+  display: flex;
+  gap: 0.6rem;
+}
+.rv-drum i {
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
-  border: 4px solid rgb(255 47 180 / 0.5);
-  box-shadow:
-    0 0 24px rgb(255 47 180 / 0.35),
-    inset 0 0 24px rgb(124 58 237 / 0.3);
-  animation: rv-pulse 600ms ease-in-out infinite alternate;
+  background: var(--aux);
+  animation: pulse-dot 900ms ease-in-out infinite;
 }
-@keyframes rv-pulse {
-  from {
-    transform: scale(0.94);
-    opacity: 0.7;
-  }
-  to {
-    transform: scale(1.06);
-    opacity: 1;
-  }
+.rv-drum i:nth-child(2) {
+  animation-delay: 150ms;
+}
+.rv-drum i:nth-child(3) {
+  animation-delay: 300ms;
+}
+.rv-drum-title {
+  font-size: var(--step-4);
 }
 
-.rv-progress {
-  margin: 0;
-  color: #9b9bb4;
-  font-size: clamp(0.75rem, 1.4vw, 0.95rem);
-  letter-spacing: 0.06em;
-}
-
-/* ── Result card per tier ─────────────────────────────────────────────────── */
-
+/* ── Result card ──────────────────────────────────────────────────────────── */
 .rv-card {
   position: relative;
-  width: min(620px, 92vw);
-  padding: clamp(1.25rem, 4vw, 2.25rem);
-  border-radius: 24px;
-  background: rgb(255 255 255 / 0.05);
-  border: 2px solid rgb(255 255 255 / 0.14);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.5rem;
-  animation: rv-slam var(--beat-dur, 520ms) cubic-bezier(0.2, 0.9, 0.2, 1.25);
+  width: 100%;
+  max-width: 40rem;
+  padding: var(--space-5) var(--space-4) var(--space-4);
+  border: 2px solid var(--line);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+  animation: rv-slam var(--beat-dur, 520ms) var(--ease-spring) both;
 }
 @keyframes rv-slam {
   from {
     opacity: 0;
-    transform: translateY(3rem) scale(0.82);
+    transform: translateY(2.5rem) scale(0.88);
   }
   to {
     opacity: 1;
     transform: none;
   }
 }
-
-.rv-tier-slam {
-  border-color: #ff2f6b;
-  box-shadow: 0 0 3rem rgb(255 47 107 / 0.45);
+.rv-card[data-tier='slam'] {
+  border-color: var(--bad);
 }
-.rv-tier-mid {
-  border-color: rgb(255 218 87 / 0.55);
+.rv-card[data-tier='top'] {
+  border-color: var(--line);
 }
-.rv-tier-top {
-  border-color: #ffda57;
-  box-shadow: 0 0 3rem rgb(255 218 87 / 0.4);
+.rv-card[data-tier='winner'] {
+  border-color: var(--lime);
+  background: var(--surface-alt);
+  box-shadow: 8px 8px 0 var(--lime-deep);
 }
-/* Winner podium card. */
-.rv-tier-winner {
-  width: min(700px, 94vw);
-  padding-block: clamp(2rem, 6vw, 3.5rem);
-  border-color: #ffda57;
-  background:
-    radial-gradient(ellipse at top, rgb(255 218 87 / 0.18), transparent 65%),
-    rgb(255 255 255 / 0.07);
-  box-shadow: 0 0 5rem rgb(255 218 87 / 0.55);
-  animation-duration: 380ms;
-}
-
 .rv-rank {
-  margin: 0;
-  font-size: clamp(1rem, 2.4vw, 1.6rem);
-  font-weight: 900;
-  letter-spacing: 0.2em;
-  color: #ffda57;
+  margin-bottom: var(--space-2);
 }
 .rv-title {
-  margin: 0;
-  font-size: clamp(1.7rem, 5vw, 3.2rem);
-  font-weight: 900;
-  line-height: 1.1;
+  font-size: var(--step-3);
 }
-.rv-tier-winner .rv-title,
-.rv-tier-top .rv-title {
-  font-size: clamp(2rem, 6.5vw, 4.2rem);
-  background: linear-gradient(100deg, #ff2fb4, #7c3aed);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+.rv-card[data-tier='winner'] .rv-title {
+  font-size: var(--step-4);
 }
 .rv-artist {
-  margin: 0;
-  color: #9b9bb4;
-  font-size: clamp(1rem, 2.2vw, 1.4rem);
-}
-.rv-score {
-  font-size: clamp(1.4rem, 3.4vw, 2.4rem);
-  font-weight: 900;
-  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  font-size: var(--step-1);
 }
 .rv-owner {
-  margin: 0.25rem 0 0;
-  color: #e8e8f2;
-  font-size: clamp(1.2rem, 2.8vw, 2rem);
-  letter-spacing: 0.04em;
+  display: grid;
+  justify-items: center;
+  margin-top: var(--space-2);
 }
-/* Explanation: text-only, below the card facts (no HTML sink). */
-.rv-explanation {
-  margin: 0.5rem 0 0;
-  max-width: 46ch;
-  color: #b9b9cf;
-  font-size: clamp(0.95rem, 1.8vw, 1.15rem);
-  line-height: 1.45;
+.rv-owner strong {
+  font-family: var(--font-display);
+  font-size: var(--step-2);
+  font-weight: 800;
+}
+.rv-score {
+  font-family: var(--font-display);
+  font-size: var(--step-3);
+  font-weight: 800;
+  color: var(--lime);
+}
+.rv-score small {
+  font-size: 0.45em;
+  color: var(--text-muted);
+  margin-left: 0.15em;
+}
+.rv-defense {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.6rem 0.8rem;
+  border-left: 3px solid var(--aux);
+  color: var(--text-muted);
+  text-align: left;
   font-style: italic;
+  justify-self: stretch;
 }
-
-.rv-crown {
-  position: absolute;
-  top: -1.2em;
-  margin: 0;
-  font-size: clamp(3.5rem, 10vw, 7rem);
-  filter: drop-shadow(0 0 18px rgb(255 218 87 / 0.7));
-  animation: rv-crown-drop 500ms cubic-bezier(0.2, 0.9, 0.2, 1.25);
+.rv-card .judge-bullets {
+  justify-self: stretch;
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: var(--rule);
 }
-@keyframes rv-crown-drop {
-  from {
-    opacity: 0;
-    transform: translateY(-40vh) rotate(-14deg);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-/* Waiting on a lagging server reveal (snapshot fallback). */
 .rv-pending {
   min-height: 8rem;
   place-content: center;
-  font-size: 3rem;
-  animation: rv-pulse 450ms ease-in-out infinite alternate;
+  color: var(--text-subtle);
+  font-size: var(--step-3);
+  animation: pulse-dot 700ms ease-in-out infinite alternate;
 }
 
-/* ── TOP-2 freeze: blurred ghosts + heartbeat ────────────────────────────── */
-
-.rv-freeze .rv-card {
-  backdrop-filter: blur(1.5px);
-}
+/* Top-2 freeze: ghost slots waiting to be revealed. */
 .rv-ghosts {
   display: flex;
-  gap: clamp(0.75rem, 3vw, 2rem);
+  gap: var(--space-3);
   justify-content: center;
 }
 .rv-ghost {
-  width: clamp(64px, 10vw, 110px);
-  height: clamp(84px, 13vw, 140px);
+  width: 4.5rem;
+  height: 5.5rem;
   display: grid;
   place-items: center;
-  border-radius: 18px;
-  border: 1px solid rgb(255 218 87 / 0.4);
-  background: rgb(255 218 87 / 0.07);
-  color: rgb(255 218 87 / 0.55);
-  font-size: clamp(1.6rem, 4vw, 2.6rem);
-  font-weight: 900;
-  filter: blur(3px);
-  animation: rv-heartbeat 600ms ease-in-out infinite;
+  border: 2px dashed var(--line-strong);
+  border-radius: var(--radius-m);
+  color: var(--text-subtle);
+  font-family: var(--font-display);
+  font-size: var(--step-3);
+  font-weight: 800;
+  animation: rv-heartbeat 700ms ease-in-out infinite;
 }
 @keyframes rv-heartbeat {
   0%,
@@ -251,15 +207,14 @@
     transform: scale(1);
   }
   30% {
-    transform: scale(1.08);
+    transform: scale(1.06);
   }
   60% {
     transform: scale(0.98);
   }
 }
 
-/* ── CSS-only confetti: three bursts ×14 pieces ───────────────────────────── */
-
+/* ── Confetti (reveal + finale) ───────────────────────────────────────────── */
 .rv-confetti {
   position: fixed;
   inset: 0;
@@ -271,77 +226,133 @@
   position: absolute;
   top: -6vh;
   left: var(--cx, 50vw);
-  width: 12px;
-  height: 20px;
-  border-radius: 3px;
-  background: var(--cc, #ffda57);
+  width: 10px;
+  height: 18px;
+  border-radius: 2px;
+  background: var(--cc, var(--lime));
   rotate: var(--cr, 0deg);
   opacity: 0;
-  animation: rv-fall 1600ms var(--cd, 0ms) cubic-bezier(0.15, 0.4, 0.6, 1) forwards;
+  animation: rv-fall 1700ms var(--cd, 0ms) cubic-bezier(0.15, 0.4, 0.6, 1) forwards;
 }
 @keyframes rv-fall {
   0% {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) rotate(0);
   }
   100% {
     opacity: 0.9;
-    transform: translateY(115vh);
+    transform: translateY(115vh) rotate(260deg);
   }
 }
 
-/* ── Reduced-motion fallback list ─────────────────────────────────────────── */
-
+/* ── Reduced-motion list ──────────────────────────────────────────────────── */
 .rv-list {
   display: grid;
-  gap: 0.75rem;
-  width: min(680px, 92vw);
+  gap: var(--space-3);
+  width: 100%;
+  max-width: 40rem;
 }
 .rv-row {
   display: grid;
-  grid-template-columns: auto auto 1fr auto;
-  gap: 0.4rem 1rem;
-  align-items: baseline;
-  padding: 0.85rem 1.1rem;
-  border-radius: 14px;
-  background: rgb(255 255 255 / 0.05);
-  border: 1px solid rgb(255 255 255 / 0.12);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: start;
+  padding: var(--space-3);
+  border: 2px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--surface);
   text-align: left;
 }
 .rv-row[data-rank='1'] {
-  border-color: #ffda57;
+  border-color: var(--lime);
 }
 .rv-row-rank {
-  font-weight: 900;
-  color: #ffda57;
+  font-family: var(--font-display);
+  font-size: var(--step-2);
+  font-weight: 800;
+  color: var(--aux);
+}
+.rv-row-body {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.rv-row-what b {
+  font-family: var(--font-display);
 }
 .rv-row-who {
-  font-weight: 800;
-}
-.rv-row-what {
-  color: #b9b9cf;
+  color: var(--text-muted);
 }
 .rv-row-score {
-  font-variant-numeric: tabular-nums;
-}
-.rv-row-why {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: #9b9bb4;
-  font-style: italic;
-  font-size: 0.95rem;
+  font-family: var(--font-display);
+  font-size: var(--step-2);
+  color: var(--lime);
 }
 
-/* Reduced motion: kill theatrics globally for this component. */
 @media (prefers-reduced-motion: reduce) {
-  .rv *,
-  .rv-flash,
-  .rv-confetti span {
-    animation: none !important;
-    backdrop-filter: none !important;
-    transition: none !important;
-  }
   .rv-confetti {
     display: none;
+  }
+}
+
+/* The verdict lands like a new record sleeve in the stack. */
+.rv-card {
+  border-width: 1px;
+  border-radius: 5px;
+  padding: clamp(1.4rem, 4vw, 2.5rem);
+  box-shadow: 5px 5px 0 var(--line);
+}
+.rv-card[data-tier='winner'] {
+  background: var(--surface);
+  border-color: var(--cobalt);
+  box-shadow: 6px 6px 0 #d9ddf5;
+}
+.rv-card[data-tier='top'] {
+  border-color: var(--line-strong);
+}
+.rv-title {
+  overflow-wrap: anywhere;
+}
+.rv-card .judge-source {
+  margin: 0.3rem 0 0;
+}
+.rv-row {
+  border-width: 0 0 1px;
+  border-radius: 0;
+}
+.rv-row[data-rank='1'] {
+  background: #eef0fc;
+  border-color: var(--line);
+}
+.rv-row-what {
+  overflow-wrap: anywhere;
+}
+.rv-row-score {
+  display: grid;
+  justify-items: end;
+}
+.rv-row-score small {
+  font: 500 0.72rem var(--font-body);
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.rv-card,
+.rv-row,
+.rv-owner,
+.rv-list {
+  min-width: 0;
+}
+.rv-score,
+.rv-owner strong {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 24rem) {
+  .rv-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .rv-row-score {
+    grid-column: 2;
+    justify-items: start;
   }
 }

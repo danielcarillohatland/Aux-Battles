@@ -18,7 +18,10 @@ export const ClientMsgIdSchema = z.string().min(8).max(64);
 
 // ── REST payloads ─────────────────────────────────────────────────────────────
 
-export const CreateRoomRequestSchema = z.object({}).strict();
+/** `judge` picks the scoring mode when the server offers open AI access. */
+export const CreateRoomRequestSchema = z
+  .object({ judge: z.enum(['ai', 'crowd']).optional() })
+  .strict();
 export const JoinRequestSchema = z.object({
   code: RoomCodeSchema,
   nickname: NicknameSchema,
@@ -31,14 +34,42 @@ export const TrackSchema = z.object({
   album: z.string().max(80).optional(),
   durationMs: z.number().int().positive().optional(),
   artUrl: z.string().url().optional(),
+  /** Catalog provenance. `original` remains readable for old room checkpoints. */
+  source: z.enum(['original', 'licensed', 'apple_music', 'deezer', 'youtube', 'manual']).optional(),
+  /**
+   * Length of the audio the host actually plays when it is shorter than the
+   * recording (30-second preview clips). The excerpt window is chosen from it.
+   */
+  playableMs: z.number().int().positive().optional(),
+  /** Sonic profile supplied to players and the judge for unfamiliar originals. */
+  description: z.string().min(1).max(240).optional(),
+  /** Human-readable credit supplied by the approved catalog. */
+  attribution: z.string().min(1).max(160).optional(),
+  /** Server-issued, host-authenticated endpoint. Stripped from player submissions. */
+  playbackUrl: z.string().startsWith('/api/v1/').max(300).optional(),
+  /** First-party provider page shown beside provider-backed playback. */
+  externalUrl: z.string().url().max(500).optional(),
+  /**
+   * Ordered fallback video ids for embedded playback (D-028). The API cannot
+   * prove a video plays in an iframe, so the host tries these in turn.
+   */
+  videoCandidates: z
+    .array(z.string().regex(/^[A-Za-z0-9_-]{11}$/))
+    .max(6)
+    .optional(),
 });
 export type Track = z.infer<typeof TrackSchema>;
 
 export const SearchRequestSchema = z.object({ query: z.string().trim().min(1).max(120) });
 
+/** Optional one-liner the player writes to argue for their pick (D-026). */
+export const DEFENSE_MAX = 160;
+export const DefenseSchema = z.string().trim().max(DEFENSE_MAX);
+
 export const SubmissionRequestSchema = z.object({
   clientMsgId: ClientMsgIdSchema,
   track: TrackSchema,
+  defense: DefenseSchema.optional(),
 });
 
 // ── REST responses / lobby state ─────────────────────────────────────────────
@@ -75,6 +106,51 @@ export const LobbyStateSchema = z.object({
 });
 export type LobbyState = z.infer<typeof LobbyStateSchema>;
 
+/**
+ * Judge rubric (D-025), total 10: does the song serve this exact moment, does
+ * its mood/energy match, what it is actually about (lyrics), whether the sound
+ * world fits (genre), plus a wildcard for audacity, humour, and sing-along pull.
+ */
+export const JudgingCategoriesSchema = z.object({
+  scenarioFit: z.number().min(0).max(3),
+  mood: z.number().min(0).max(2),
+  lyrics: z.number().min(0).max(2),
+  genre: z.number().min(0).max(2),
+  wildcard: z.number().min(0).max(1),
+});
+export const JUDGING_CATEGORY_MAX: Readonly<Record<keyof JudgingCategories, number>> = {
+  scenarioFit: 3,
+  mood: 2,
+  lyrics: 2,
+  genre: 2,
+  wildcard: 1,
+};
+export type JudgingCategories = z.infer<typeof JudgingCategoriesSchema>;
+
+/** One short sentence per bullet (D-032). */
+export const JudgeLineSchema = z.string().min(1).max(160);
+
+/** How much the AI judge actually knew about the song (low = scored mostly neutral). */
+export const JudgeConfidenceSchema = z.enum(['high', 'medium', 'low']);
+export type JudgeConfidence = z.infer<typeof JudgeConfidenceSchema>;
+
+export const TrackJudgementSchema = z.object({
+  totalScore: z.number().min(0).max(10),
+  categories: JudgingCategoriesSchema,
+  /** Two or three concrete reasons the song fits or misses. */
+  reasons: z.array(JudgeLineSchema).min(1).max(3).optional(),
+  /** Whether the player's defense actually helped. */
+  defenseNote: JudgeLineSchema.optional(),
+  /** One decisive closing sentence. */
+  verdict: JudgeLineSchema.optional(),
+  /** The bullets joined into prose for players and stored results. */
+  explanation: z.string().min(1).max(700),
+  /** Provenance survives the wire so fallback scores are never presented as AI. */
+  judgeModel: z.string().min(1).max(160).optional(),
+  confidence: JudgeConfidenceSchema.optional(),
+});
+export type TrackJudgement = z.infer<typeof TrackJudgementSchema>;
+
 export const SnapshotSchema = z.object({
   roomCode: RoomCodeSchema,
   state: z.enum(FSM_STATES),
@@ -87,15 +163,56 @@ export const SnapshotSchema = z.object({
   /** Current round content. Optional while older checkpoints are rehydrated. */
   category: z.string().max(80).nullable().optional(),
   scenario: z.string().max(240).nullable().optional(),
+  /** The feeling the song should create, shared by players and the judge (null = custom prompt). */
+  scenarioVibe: z.string().max(120).nullable().optional(),
   /** Anonymous playback order; ownership is revealed only in `results`. */
   queue: z.array(TrackSchema).optional(),
   playbackIndex: z.number().int().nonnegative().optional(),
+  playbackDevice: z.string().max(120).nullable().optional(),
+  playbackError: z.string().max(280).nullable().optional(),
+  playbackStatus: z.enum(['ready', 'starting', 'playing', 'complete', 'failed']).optional(),
+  excerptStartMs: z.number().int().nonnegative().optional(),
+  excerptDurationMs: z.number().int().positive().optional(),
+  excerptStartedAt: z.number().int().nullable().optional(),
+  judgingIndex: z.number().int().nonnegative().optional(),
+  judgingCount: z.number().int().nonnegative().optional(),
+  judgingStatus: z.enum(['idle', 'listening', 'analyzing', 'revealed', 'voting']).optional(),
+  judgingMode: z.enum(['ai', 'crowd']).optional(),
+  /** Why the room is voting instead of the AI judge (null = chosen crowd play). */
+  judgeNotice: z.enum(['off_duty', 'unavailable']).nullable().optional(),
+  judgingCompleted: z.number().int().nonnegative().optional(),
+  crowdVote: z
+    .object({
+      ballotId: z.string(),
+      options: z.array(z.object({ id: z.string(), track: TrackSchema })),
+      eligible: z.boolean(),
+      voted: z.boolean(),
+      received: z.number().int().nonnegative(),
+      eligibleCount: z.number().int().nonnegative(),
+      closesAt: z.number().int(),
+      canClose: z.boolean(),
+      tiePolicy: z.string(),
+    })
+    .nullable()
+    .optional(),
+  judgingTrack: TrackSchema.nullable().optional(),
+  /** The anonymous defense written by whoever picked the track under review. */
+  judgingDefense: z.string().max(DEFENSE_MAX).nullable().optional(),
+  judgingResult: TrackJudgementSchema.nullable().optional(),
   results: z
     .array(
       z.object({
         rank: z.number().int().positive(),
         score: z.number().int().min(0).max(100),
-        explanation: z.string().max(280),
+        explanation: z.string().max(700),
+        judgeModel: z.string().min(1).max(160).optional(),
+        reasons: z.array(JudgeLineSchema).min(1).max(3).optional(),
+        defenseNote: JudgeLineSchema.optional(),
+        verdict: JudgeLineSchema.optional(),
+        defense: z.string().max(DEFENSE_MAX).optional(),
+        categories: JudgingCategoriesSchema.optional(),
+        totalScore: z.number().min(0).max(10).optional(),
+        confidence: JudgeConfidenceSchema.optional(),
         track: TrackSchema,
         owner: NicknameSchema,
         chicken: z.boolean(),
@@ -130,7 +247,7 @@ export const JudgementResultSchema = z.object({
   score: z.number().int().min(0).max(100),
   title: z.string().min(1).max(80),
   artist: z.string().min(1).max(80),
-  explanation: z.string().max(280),
+  explanation: z.string().max(700),
   /** Owner nickname — anonymity ends here; this payload ships only post-judging. */
   nickname: NicknameSchema,
 });

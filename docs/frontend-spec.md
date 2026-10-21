@@ -41,7 +41,7 @@
 
 ## 2. Screen Inventory & Wireframes
 
-All screens share: dark stage background (#0E0B16 base), one accent gradient (hot magenta→electric violet), display font for headlines (e.g., "Archivo Black" or "Clash Display"), rounded-2xl cards, generous glow shadows. Motion language: spring easings (overshoot 1.2), nothing under 150 ms.
+All screens share a dark stage background (#0E0B16 base), bold high-contrast typography, a restrained magenta action color, and generous negative space. Cards, borders, rounded corners, and shadows are used only when they clarify hierarchy. System emoji and decorative gradients are not interface assets. Motion marks game beats with short transform/opacity transitions, remains responsive, and honors `prefers-reduced-motion`.
 
 ### 2.1 Landing (desktop-first, works on phone)
 ```
@@ -150,7 +150,7 @@ Layout is built **around the open keyboard**, not despite it:
 └────────────────┘
 ```
 Rules:
-- Search debounced 250 ms, min 2 chars; results capped at 10; skeleton shimmer rows.
+- Search debounced 250 ms, min 2 chars; results capped at 20 via provider pagination; skeleton shimmer rows.
 - **Lock is a two-step**: tap LOCK IT IN → button morphs into "SURE? 🔒" for 1.5 s → second tap locks. Prevents fat-thumb tragedy, adds tension.
 - After lock: keyboard dismissed programmatically, full-screen "SEALED 🤐" stamp animation over blurred pick. Cannot unseal.
 - Empty query state shows category hint chips ("try: heartbreak, gym, 2000s") that inject text.
@@ -340,15 +340,15 @@ Principle: **party games die from silence.** Every degraded state gets personali
 
 | Situation | Behavior |
 |---|---|
-| Socket degraded (amber) | Slim top banner: "shaky connection… holding on 🤞". Game continues on local clock. |
+| Socket degraded (amber) | Slim top banner: "Shaky connection — reconnecting…". Game continues on local clock. |
 | Player disconnected mid-phase | Auto-resync on return; if missed lock window → auto-pick flow with "CHICKEN" label (§2.7). Others see avatar go translucent with "zzz". |
-| Player disconnected in lobby >60 s | Host chip shows ghost icon; host may eject. They can rejoin with same token (stored localStorage) reclaiming identity. |
-| Full disconnect (player) | Full-screen: "You fell out of the aux 📴" + [RECONNECT] (auto-attempts in background) + room code shown for manual rejoin. Never dead-end. |
-| Room closed / host left | Friendly: "The party ended 🎈" + stats recap of your night + [FIND NEW PARTY]. |
+| Player disconnected in lobby >60 s | Host chip shows an offline label; host may eject. They can rejoin with the same stored token and reclaim identity. |
+| Full disconnect (player) | Full-screen: "You fell out of the aux" + [RECONNECT] (auto-attempts in background) + room code shown for manual rejoin. Never dead-end. |
+| Room closed / host left | Friendly: "The party ended" + stats recap of your night + [FIND NEW PARTY]. |
 | Invalid/expired code | Join field shake + "That room's gone cold. Check the code?" |
 | Spotify/auth failure (host) | Playback screen inline error card with [RETRY] + [SKIP THIS TRACK]; game never hard-blocks — reveal can proceed with "silent disco mode" disclaimer. |
 | Empty states | Lobby with 0 others: host sees pulsing "Share the QR!" arrow pointing at code; search no-results: joke copy + suggestion chips; vote with 0 votes yet: bars breathe invitingly. |
-| Server error surfaces | Toast pattern: emoji + human sentence + one action. Error codes mapped centrally in `errors.ts` (one place to keep copy funny and consistent). |
+| Server error surfaces | Human sentence + one action, without raw provider/HTTP details. Error codes are mapped centrally in `errors.ts`. |
 
 ---
 

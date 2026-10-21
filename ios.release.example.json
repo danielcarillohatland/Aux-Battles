@@ -1,0 +1,6 @@
+{
+  "apiOrigin": "https://YOUR-BACKEND-DOMAIN",
+  "publicOrigin": "https://YOUR-BACKEND-DOMAIN",
+  "appleTeamId": "YOURTEAMID",
+  "aiGamePacks": true
+}

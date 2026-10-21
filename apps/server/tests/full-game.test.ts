@@ -4,8 +4,13 @@ import { buildServer } from '../src/index.js';
 
 describe('full manual-mode game', () => {
   let app: FastifyInstance;
+  let orchestrator: Awaited<ReturnType<typeof buildServer>>['orchestrator'];
   beforeAll(async () => {
-    ({ app } = await buildServer({ LOG_LEVEL: 'error', AUX_DB_FILE: ':memory:' }));
+    ({ app, orchestrator } = await buildServer({
+      LOG_LEVEL: 'error',
+      AUX_DB_FILE: ':memory:',
+      AUX_ENABLE_ORIGINALS: '1',
+    }));
   });
   afterAll(async () => app.close());
 
@@ -18,7 +23,7 @@ describe('full manual-mode game', () => {
         url: `/api/v1/rooms/${host.code}/join`,
         payload: { nickname },
       });
-      return response.json().data as { playerToken: string };
+      return response.json().data as { playerToken: string; playerId: string };
     };
     const ada = await join('Ada');
     const bob = await join('Bob');
@@ -43,13 +48,37 @@ describe('full manual-mode game', () => {
           track: { id, title, artist: 'Test Artist', durationMs: 180_000 },
         },
       });
-    expect((await submit(ada.playerToken, 'track-ada', 'Fast Escape')).statusCode).toBe(200);
-    expect((await submit(bob.playerToken, 'track-bob', 'Slow Ride')).statusCode).toBe(200);
+    expect(
+      (await submit(ada.playerToken, 'original:wrong-turn-right-party', 'Fast Escape')).statusCode,
+    ).toBe(200);
+    expect(
+      (await submit(bob.playerToken, 'original:midnight-pancakes', 'Slow Ride')).statusCode,
+    ).toBe(200);
 
     expect((await action('begin_playback')).statusCode).toBe(200);
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect((await action('manual_next')).statusCode).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 10));
     expect((await action('manual_next')).statusCode).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    for (const player of [ada, bob]) {
+      const ballot = orchestrator.buildSnapshot(host.code, {
+        playerId: player.playerId,
+        role: 'player',
+        nickname: null,
+      })!.crowdVote!;
+      expect(ballot.options).toHaveLength(1);
+      expect(
+        (
+          await app.inject({
+            method: 'POST',
+            url: `/api/v1/rooms/${host.code}/crowd-vote`,
+            headers: { authorization: `Bearer ${player.playerToken}` },
+            payload: { ballotId: ballot.ballotId, optionId: ballot.options[0]!.id },
+          })
+        ).statusCode,
+      ).toBe(200);
+    }
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const state = async () =>

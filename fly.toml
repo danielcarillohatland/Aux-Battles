@@ -4,20 +4,34 @@ primary_region = "osl"
 [build]
   dockerfile = "Dockerfile"
 
+# The site's public address. Fly's free address works immediately; when your
+# subdomain is ready (e.g. https://aux.yourname.no), change BOTH lines below,
+# run `flyctl certs add aux.yourname.no`, and deploy again.
+[build.args]
+  AUX_PUBLIC_ORIGIN = "https://aux-battles.fly.dev"
+
 [env]
+  AUX_PUBLIC_ORIGIN = "https://aux-battles.fly.dev"
   PORT = "8787"
   HOST = "0.0.0.0"
   NODE_ENV = "production"
   AUX_DB_FILE = "/data/aux.sqlite"
-  AUX_SPOTIFY_TOKEN_FILE = "/data/spotify-tokens.json"
   AUX_ANALYTICS_FILE = "/data/analytics.ndjson"
+  # Number of trusted proxy hops: Fly's edge appends the real client address.
   AUX_TRUST_PROXY = "1"
   AUX_DEV_MODE = "0"
+  # Free AI judge for everyone, capped per day and by the durable budgets.
+  AUX_AI_ACCESS = "open"
+  AUX_OPEN_AI_DAILY_GAMES = "30"
+  AUX_AI_DAILY_BUDGET_MICROS = "500000"
+  AUX_AI_MONTHLY_BUDGET_MICROS = "3000000"
 
 [[mounts]]
   source = "aux_data"
   destination = "/data"
 
+# Rooms, sockets and timers live in one process with SQLite on the volume.
+# Run exactly ONE machine: do not `fly scale count` above 1.
 [http_service]
   internal_port = 8787
   force_https = true

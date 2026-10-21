@@ -19,7 +19,7 @@ export const HEARTBEAT_INTERVAL_MS = 15_000;
 export const RECONNECT_GRACE_MS = 120_000;
 
 /** Phase timing defaults (TDD §4) — host-adjustable at runtime later. */
-export const SCENARIO_DISPLAY_MS = 8_000;
+export const SCENARIO_DISPLAY_MS = 15_000;
 export const SONG_SELECTION_MS = 90_000;
 export const AI_JUDGING_TIMEOUT_MS = 20_000;
 
@@ -44,5 +44,5 @@ export const FSM_STATES = [
 export type FsmState = (typeof FSM_STATES)[number];
 
 /** Playback modes broadcast in every snapshot (D-E). */
-export const PLAYBACK_MODES = ['api', 'manual', 'silent'] as const;
+export const PLAYBACK_MODES = ['catalog', 'manual', 'silent'] as const;
 export type PlaybackMode = (typeof PLAYBACK_MODES)[number];

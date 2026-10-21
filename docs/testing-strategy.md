@@ -1,5 +1,7 @@
 # AUX BATTLES — Testing Strategy (MVP)
 
+> **Historical design document (August 2026).** Kept for decision history. Parts no longer match the shipped system (Spotify, Postgres/Drizzle, Playwright, "no accounts or payments"). Current sources: [README](../README.md), [TDD](TDD.md), [DECISIONS](DECISIONS.md), [AI judge](ai-judge.md), [billing](billing.md), [DEPLOY](../DEPLOY.md).
+
 Realtime multiplayer FSM party game. Server-authoritative, websockets, no accounts, must survive a real playtest with 8–15 people on flaky wifi. This strategy optimizes for **fast iteration** while catching the failure classes that actually kill party games: state desync, stuck rooms, and crashes mid-reveal.
 
 ---

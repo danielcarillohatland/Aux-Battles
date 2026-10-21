@@ -20,7 +20,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   return {
     port: Number.isInteger(parsedPort) && parsedPort > 0 ? parsedPort : 8787,
     host: env.HOST ?? '0.0.0.0',
-    devMode: env.AUX_DEV_MODE === '1',
+    devMode: env.NODE_ENV !== 'production' && env.AUX_DEV_MODE === '1',
     logLevel: LOG_LEVELS.includes(candidate)
       ? candidate
       : env.NODE_ENV !== 'production'

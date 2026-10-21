@@ -1,5 +1,7 @@
 # AUX BATTLES — Security Review (MVP)
 
+> **Historical design document (August 2026).** Kept for decision history. Parts no longer match the shipped system (Spotify, Postgres/Drizzle, Playwright, "no accounts or payments"). Current sources: [README](../README.md), [TDD](TDD.md), [DECISIONS](DECISIONS.md), [AI judge](ai-judge.md), [billing](billing.md), [DEPLOY](../DEPLOY.md).
+
 Threat model and mitigations for an anonymous-nickname realtime party game. Framing principle: **this is a party game, not a bank.** The assets are game fairness, room availability, and brand safety (no XSS defacements, no surprise LLM bills, no leaked Spotify tokens). There are no accounts, no payments, no PII beyond transient nicknames. Every mitigation below is ranked: 🔴 ship in MVP / 🟡 ship soon after / 🟢 backlog.
 
 ---

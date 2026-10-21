@@ -168,7 +168,7 @@ describe('valid transitions emit change intents + deadline math (fake clock)', (
 
     await fsm.dispatch('PICK_CATEGORY');
     expect(fsm.state).toBe('SCENARIO');
-    expect(fsm.phaseEndsAt).toBe(t0 + 8_000); // SCENARIO_DISPLAY_MS
+    expect(fsm.phaseEndsAt).toBe(t0 + 15_000); // SCENARIO_DISPLAY_MS
 
     vi.advanceTimersByTime(3_000);
     await fsm.dispatch('TIMER_EXPIRED'); // → SONG_SELECTION
@@ -187,7 +187,7 @@ describe('valid transitions emit change intents + deadline math (fake clock)', (
     await fsm.dispatch('START_GAME');
     await fsm.dispatch('PICK_CATEGORY');
     const scenarioDeadline = fsm.phaseEndsAt;
-    expect(scenarioDeadline).toBe(Date.now() + 8_000); // untouched phase keeps default
+    expect(scenarioDeadline).toBe(Date.now() + 15_000); // untouched phase keeps default
 
     await fsm.dispatch('SKIP_PHASE');
     expect(fsm.phaseEndsAt).toBe(Date.now() + 30_000); // override applied
@@ -334,7 +334,7 @@ describe('hard case: mutex re-entry & races resolve to ONE transition', () => {
       const fired: string[] = [];
 
       // SCENARIO phase armed; host skips; controller re-arms for SONG_SELECTION.
-      const scenarioDeadline = Date.now() + 8_000;
+      const scenarioDeadline = Date.now() + 15_000;
       timers.arm('TST01', scenarioDeadline, () => fired.push('scenario-expiry'));
       const skipAt = Date.now() + 3_000;
       vi.setSystemTime(skipAt);

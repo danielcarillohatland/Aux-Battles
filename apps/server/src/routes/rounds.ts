@@ -18,13 +18,15 @@
  * - Quorum early-fire: count === connected players → ALL_SUBMITTED through the
  *   controller's FSM-mutex dispatcher.
  */
+import { createHash } from 'node:crypto';
 import { RoomCodeSchema, SubmissionRequestSchema, apiError } from '@aux/shared';
-import type { FsmState } from '@aux/shared';
+import type { FsmState, Track } from '@aux/shared';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { RoomManager } from '../core/room-manager.js';
 import { AlreadySubmittedError, SubmissionStore, roundKeyOf } from '../core/submissions.js';
 import { createRateLimiter } from '../core/rate-limit.js';
 import { verifyToken } from '../core/tokens.js';
+import { MusicCatalogError, type ApprovedMusicCatalog } from '../providers/music-provider.js';
 
 export interface RoomPhase {
   state: FsmState;
@@ -34,6 +36,8 @@ export interface RoomPhase {
 export interface RoundsRouteOptions {
   roomManager: RoomManager;
   submissions: SubmissionStore;
+  /** Catalog ids are re-resolved here; manual entries use server-owned metadata. */
+  catalog: ApprovedMusicCatalog;
   /**
    * Seam into the per-room runtime (game-runtimes owns the FSM): current state
    * + roundIdx, or null when no runtime exists for the code.
@@ -46,6 +50,27 @@ export interface RoundsRouteOptions {
 }
 
 const submissionLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+
+/** Canonicalize player-entered metadata for the zero-configuration manual path. */
+export function canonicalManualTrack(track: Track): Track | null {
+  if (track.source !== 'manual' && !track.id.startsWith('manual:')) return null;
+  const title = track.title.trim();
+  const artist = track.artist.trim();
+  if (title === '' || artist === '') return null;
+  const album = track.album?.trim();
+  const digest = createHash('sha256')
+    .update(`${title.toLowerCase()}\0${artist.toLowerCase()}`)
+    .digest('hex')
+    .slice(0, 20);
+  return {
+    id: `manual:${digest}`,
+    title,
+    artist,
+    ...(album ? { album } : {}),
+    source: 'manual',
+    attribution: 'Song details entered by a player',
+  };
+}
 
 /** Extract + verify a Bearer session token against the room's players
  *  (same pattern as game-runtimes.ts authenticate — kept local on purpose). */
@@ -134,12 +159,39 @@ export function roundsRoute(opts: RoundsRouteOptions): FastifyPluginAsync {
     }
 
     try {
+      // Provider ids are re-resolved to canonical metadata. The explicit
+      // manual path accepts bounded title/artist text but rebuilds every field,
+      // id, source and attribution before persistence or judge review.
+      let safeTrack: Track;
+      const manualTrack = canonicalManualTrack(parsed.data.track);
+      if (manualTrack !== null) {
+        safeTrack = manualTrack;
+      } else {
+        try {
+          safeTrack = await opts.catalog.getTrack(parsed.data.track.id);
+        } catch (error) {
+          if (error instanceof MusicCatalogError && error.code === 'TRACK_UNPLAYABLE') {
+            return reply
+              .code(400)
+              .send(apiError('INVALID_ACTION', 'choose a catalog song or enter one manually'));
+          }
+          if (error instanceof MusicCatalogError && error.code === 'CATALOG_DOWN') {
+            return reply
+              .code(503)
+              .send(
+                apiError('INTERNAL', 'The music catalog is unavailable. Enter the song manually.'),
+              );
+          }
+          throw error;
+        }
+      }
       const result = submissions.submit({
         code,
         roundIdx,
         playerId: auth.playerId,
         clientMsgId: parsed.data.clientMsgId,
-        track: parsed.data.track,
+        track: safeTrack,
+        defense: parsed.data.defense,
       });
 
       if (result.status === 'stored') {

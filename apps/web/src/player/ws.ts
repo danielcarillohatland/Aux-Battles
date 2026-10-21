@@ -1,3 +1,4 @@
+import { requestWithDeadline } from '../config/request.js';
 /**
  * AUX BATTLES — player realtime client (TDD §9 + D-D).
  *
@@ -14,6 +15,7 @@
 import { createSignal } from 'solid-js';
 import { HEARTBEAT_INTERVAL_MS, ServerFrameSchema, SnapshotSchema } from '@aux/shared';
 import type { ServerFrame, Snapshot } from '@aux/shared';
+import { apiUrl, webSocketUrl } from '../config/endpoints.js';
 
 const BACKOFF_BASE_MS = 500;
 const BACKOFF_MAX_MS = 8_000;
@@ -39,6 +41,8 @@ export interface RealtimeHandle {
    * frames so the sealed screen ticks without waiting for the next snapshot.
    */
   readonly submissionCount: () => number | null;
+  /** Development-only detail for the latest socket error/close. */
+  readonly connectionIssue: () => string | null;
   stop: () => void;
 }
 
@@ -55,6 +59,7 @@ export function createPlayerRealtime(opts: RealtimeOptions): RealtimeHandle {
   const [connState, setConnState] = createSignal<ConnState>('connecting');
   const [countdownSeconds, setCountdownSeconds] = createSignal<number | null>(null);
   const [submissionCount, setSubmissionCount] = createSignal<number | null>(null);
+  const [connectionIssue, setConnectionIssue] = createSignal<string | null>(null);
 
   let ws: WebSocket | null = null;
   let stopped = false;
@@ -90,14 +95,18 @@ export function createPlayerRealtime(opts: RealtimeOptions): RealtimeHandle {
   const pollSnapshot = async () => {
     let res: Response;
     try {
-      res = await fetch(`/api/v1/rooms/${encodeURIComponent(opts.code)}/snapshot`, {
-        headers: { accept: 'application/json' },
-      });
+      res = await requestWithDeadline(
+        apiUrl(`/api/v1/rooms/${encodeURIComponent(opts.code)}/snapshot`),
+        {
+          headers: { accept: 'application/json', authorization: `Bearer ${opts.playerToken}` },
+        },
+      );
     } catch {
       return; // transient; next tick retries
     }
     if (stopped) return;
-    if (res.status === 404) {
+    if (res.status === 404 || res.status === 401) {
+      terminate(null, 'player session expired');
       opts.onRoomGone?.();
       return;
     }
@@ -145,14 +154,17 @@ export function createPlayerRealtime(opts: RealtimeOptions): RealtimeHandle {
     if (!ServerFrameSchema.safeParse(raw).success) return;
     const frame = raw as ServerFrame;
 
+    // The room sequence includes informational frames too. Advance it for
+    // every valid frame so the next snapshot does not trigger a false gap.
+    if (lastSeq !== null && frame.seq > lastSeq + 1) {
+      resync();
+      return;
+    }
+    if (lastSeq !== null && frame.seq <= lastSeq) return;
+    lastSeq = frame.seq;
+
     switch (frame.t) {
       case 'state_change': {
-        // Seq-gap repair (D-D): fresh handshake's first state_change resyncs.
-        if (lastSeq !== null && frame.seq > lastSeq + 1) {
-          resync();
-          return;
-        }
-        lastSeq = frame.seq;
         applySnapshot(frame.snapshot);
         return;
       }
@@ -195,9 +207,9 @@ export function createPlayerRealtime(opts: RealtimeOptions): RealtimeHandle {
     }
   };
 
-  const fetchTicket = async (): Promise<string | null> => {
+  const fetchTicket = async (): Promise<{ ticket: string } | { authFailed: true } | null> => {
     try {
-      const res = await fetch('/api/v1/ws-ticket', {
+      const res = await requestWithDeadline(apiUrl('/api/v1/ws-ticket'), {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -205,10 +217,11 @@ export function createPlayerRealtime(opts: RealtimeOptions): RealtimeHandle {
         },
         body: JSON.stringify({ code: opts.code }),
       });
+      if (res.status === 401 || res.status === 403) return { authFailed: true };
       if (!res.ok || res.status === 404) return null; // endpoint not deployed yet → fallback
       const body = (await res.json()) as { ok?: boolean; data?: { ticket?: unknown } };
       const ticket = body.ok === true ? body.data?.ticket : undefined;
-      return typeof ticket === 'string' && ticket.length > 0 ? ticket : null;
+      return typeof ticket === 'string' && ticket.length > 0 ? { ticket } : null;
     } catch {
       return null;
     }
@@ -219,20 +232,32 @@ export function createPlayerRealtime(opts: RealtimeOptions): RealtimeHandle {
     teardownSocket();
     setConnState('connecting');
 
-    const ticket = await fetchTicket();
-    if (ticket === null) return onHandshakeFailed();
+    const ticketResult = await fetchTicket();
+    if (ticketResult === null) return onHandshakeFailed();
+    if ('authFailed' in ticketResult) {
+      terminate(null, 'player session expired');
+      opts.onRoomGone?.();
+      return;
+    }
+    const ticket = ticketResult.ticket;
     if (stopped) return;
 
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     let socket: WebSocket;
+    const socketUrl = webSocketUrl(
+      `/ws?room=${encodeURIComponent(opts.code)}&ticket=${encodeURIComponent(ticket)}`,
+    );
+    if (import.meta.env.DEV) console.debug('[player ws] constructing', socketUrl);
     try {
-      socket = new WebSocket(
-        `${proto}//${location.host}/ws?room=${encodeURIComponent(opts.code)}&ticket=${encodeURIComponent(ticket)}`,
-      );
+      socket = new WebSocket(socketUrl);
     } catch {
       return onHandshakeFailed();
     }
     ws = socket;
+
+    socket.onopen = () => {
+      setConnectionIssue(null);
+      if (import.meta.env.DEV) console.debug('[player ws] open', socketUrl);
+    };
 
     socket.onmessage = (ev) => {
       if (socket !== ws) return;
@@ -240,8 +265,11 @@ export function createPlayerRealtime(opts: RealtimeOptions): RealtimeHandle {
       try {
         parsed = JSON.parse(String(ev.data));
       } catch {
+        if (import.meta.env.DEV) setConnectionIssue('WebSocket sent a non-JSON frame.');
         return;
       }
+      if (import.meta.env.DEV)
+        console.debug('[player ws] message', (parsed as { t?: unknown }).t ?? 'unknown');
       if (connState() !== 'live') {
         wsAttempts = 0;
         stopPolling(); // WS recovered — polling stands down
@@ -249,13 +277,22 @@ export function createPlayerRealtime(opts: RealtimeOptions): RealtimeHandle {
       setConnState('live');
       handleFrame(parsed);
     };
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       if (socket !== ws || stopped) return;
+      if (import.meta.env.DEV) {
+        const reason = event.reason || 'no reason supplied';
+        setConnectionIssue(`WebSocket closed (${event.code}): ${reason}`);
+        console.debug('[player ws] close', event.code, reason);
+      }
       teardownSocket();
       onHandshakeFailed();
     };
     socket.onerror = () => {
-      /* close follows */
+      if (import.meta.env.DEV) {
+        setConnectionIssue(`WebSocket error while connecting to ${socketUrl}`);
+        console.error('[player ws] error', socketUrl);
+      }
+      /* close normally follows and adds its code/reason */
     };
 
     // Heartbeat + zombie-socket watchdog.
@@ -277,6 +314,12 @@ export function createPlayerRealtime(opts: RealtimeOptions): RealtimeHandle {
     if (stopped) return;
     wsAttempts += 1;
     lastSeq = null;
+    if (pollTimer !== undefined) {
+      // A background probe failed while polling: stay degraded and keep probing.
+      setConnState('polling');
+      scheduleReconnect(WS_RETRY_WHILE_POLLING_MS);
+      return;
+    }
     if (wsAttempts >= MAX_WS_ATTEMPTS && connState() !== 'live') {
       startPolling();
       return;
@@ -318,6 +361,7 @@ export function createPlayerRealtime(opts: RealtimeOptions): RealtimeHandle {
     connState,
     countdownSeconds,
     submissionCount,
+    connectionIssue,
     stop: () => terminate(null, 'client stopped'),
   };
 }

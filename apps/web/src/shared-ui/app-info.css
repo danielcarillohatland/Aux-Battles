@@ -1,0 +1,142 @@
+.app-info {
+  width: 100%;
+  max-width: 42rem;
+  color: var(--cream);
+  text-align: left;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  user-select: text;
+}
+.app-info > summary {
+  width: fit-content;
+  min-height: 44px;
+  padding: 0.65rem 0;
+  cursor: pointer;
+  color: var(--cream-dim);
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.app-info-body {
+  display: grid;
+  gap: 1rem;
+  padding: 1.2rem;
+  border: 1px solid var(--ink-700);
+  border-radius: var(--radius-m);
+  background: var(--ink-900);
+  overflow-wrap: anywhere;
+}
+.app-info-body h2 {
+  font-size: 1.3rem;
+}
+.app-info-body h3 {
+  font-size: 1.05rem;
+  line-height: 1.3;
+}
+.app-info-body p {
+  color: var(--cream-dim);
+  font-size: 0.83rem;
+}
+.app-info-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.2rem;
+}
+.app-info-links a,
+.app-info-links > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding-block: 0.4rem;
+  font-size: 0.85rem;
+}
+.app-info-links a {
+  color: var(--aux);
+  text-underline-offset: 0.2em;
+}
+.app-info-links > span {
+  color: var(--ink-500);
+}
+.app-info-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  align-items: center;
+}
+.app-report {
+  display: grid;
+  gap: 0.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--ink-700);
+}
+.app-report form,
+.app-report label {
+  display: grid;
+  gap: 0.5rem;
+}
+.app-report form {
+  gap: 1rem;
+}
+.app-report label {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.app-report label > span,
+.app-report-note {
+  font-weight: 400;
+}
+.app-report .field {
+  min-height: 48px;
+  font-size: 1rem;
+}
+.app-report textarea {
+  resize: vertical;
+}
+.app-report .app-report-hide {
+  display: flex;
+  gap: 0.75rem;
+  align-items: start;
+  min-height: 44px;
+}
+.app-report-hide input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0.2rem 0 0;
+  accent-color: var(--aux);
+}
+.app-report [role='alert'] {
+  color: var(--bad);
+}
+.app-report-success {
+  padding: 0.75rem;
+  border: 1px solid var(--good);
+  border-radius: var(--radius-s);
+}
+.app-report-success > span {
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+}
+.landing-footer > .app-info {
+  flex-basis: 100%;
+}
+.host-account-card .app-info {
+  padding-top: 0.3rem;
+}
+.p-postround > .app-info {
+  margin-top: auto;
+}
+.rv > .app-info {
+  position: relative;
+  z-index: 6;
+}
+@media (max-width: 420px) {
+  .app-info-body {
+    padding: 1rem;
+  }
+  .app-report button {
+    width: 100%;
+  }
+}

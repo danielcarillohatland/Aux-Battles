@@ -13,6 +13,8 @@
  *     LAN-reachable address).
  */
 
+import { publicAppOrigin } from '../config/endpoints.js';
+
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]', '0.0.0.0']);
 
 function isLoopback(host: string): boolean {
@@ -32,7 +34,7 @@ export function currentOriginInfo(): { host: string; isLoopback: boolean } {
  * @param origin optional explicit base origin (wins over everything)
  */
 export function buildJoinUrl(code: string, origin?: string): string {
-  const base = origin ?? window.location.origin;
+  const base = origin ?? publicAppOrigin() ?? window.location.origin;
   return `${base.replace(/\/$/, '')}/player.html?code=${encodeURIComponent(code)}`;
 }
 
@@ -43,6 +45,27 @@ export function buildJoinUrl(code: string, origin?: string): string {
  */
 export function resolveJoinOrigin(explicit?: string | null): string | null {
   if (explicit && explicit.trim() !== '') return explicit.trim().replace(/\/$/, '');
+  const configured = publicAppOrigin();
+  if (configured !== null) return configured;
   const { isLoopback } = currentOriginInfo();
   return isLoopback ? null : window.location.origin;
+}
+
+/**
+ * YouTube's embedded player returns error 150 ("uploader does not allow
+ * embedding") for EVERY video when the parent page's origin is a bare IP
+ * address such as 127.0.0.1 or 192.168.0.122; hostnames (localhost, Name.local,
+ * a real domain) play fine. The host screen must therefore be opened by name.
+ */
+export function isIpAddressHost(hostname: string): boolean {
+  const h = hostname.trim();
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(h) || /^\[?[0-9a-f:]*:[0-9a-f:]*\]?$/i.test(h);
+}
+
+/** Same page on an embed-safe hostname, for the fix-it link in the host UI. */
+export function embedSafeHostUrl(
+  location: Pick<Location, 'protocol' | 'port' | 'pathname'>,
+): string {
+  const port = location.port ? `:${location.port}` : '';
+  return `${location.protocol}//localhost${port}${location.pathname}`;
 }

@@ -20,9 +20,10 @@ import type { FsmState } from '@aux/shared';
 import { submitRandomForMissing } from './rounds.js';
 import type { SubmissionStore, SubmissionsPayload } from '../core/submissions.js';
 import { createRateLimiter, type RateLimiter } from '../core/rate-limit.js';
-import { verifyToken } from '../core/tokens.js';
+import { hashToken, mintToken, verifyToken } from '../core/tokens.js';
 import type { WsHub } from '../ws/types.js';
 import type { OrchestratorPayload, RoundOrchestrator } from '../core/round-orchestrator.js';
+import { BillingError, OPEN_AI_ACCOUNT_ID, type SqliteBillingLedger } from '../billing/ledger.js';
 
 /** Durable checkpoint shape: FSM state + roster linkage. Opaque to RoomStore. */
 interface Checkpoint {
@@ -47,11 +48,16 @@ export interface GameRuntimesOptions {
   exposeRuntime?(runtime: {
     getRoomPhase(code: string): { state: import('@aux/shared').FsmState; roundIdx: number } | null;
     dispatchAllSubmitted(code: string): Promise<boolean>;
+    /** Drop an expired room's FSM and timers so a recycled code starts fresh. */
+    forget(code: string): void;
   }): void;
   /** Push surface for kick (Phase 3 roster mgmt); attached when WS hub exists. */
   wsHub?: WsHub | undefined;
   /** Submission engine (Phase 3): chicken-fill on SONG_SELECTION timer expiry. */
   submissions: SubmissionStore;
+  billing?: SqliteBillingLedger;
+  /** Site-wide cap on free AI games per UTC day (open access only). */
+  openAiDailyGames?: number;
 }
 
 const hostActionLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
@@ -235,9 +241,46 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
       return { ok: false, status: 404, body: apiError('ROOM_NOT_FOUND', 'no such room') };
     }
     try {
+      const room = roomManager.get(code);
+      const reservationKey = room ? `${code}:${room.createdAt}` : '';
+      if (event === 'START_GAME' && rt.fsm.state === 'LOBBY' && room?.billingAccountId) {
+        if (!opts.billing)
+          throw new BillingError(
+            'BILLING_UNAVAILABLE',
+            'AI games are temporarily unavailable.',
+            503,
+          );
+        if (room.billingAccountId !== OPEN_AI_ACCOUNT_ID) {
+          opts.billing.reserveGame(room.billingAccountId, reservationKey);
+        } else {
+          try {
+            opts.billing.reserveOpenGame(reservationKey, opts.openAiDailyGames ?? 0);
+          } catch (error) {
+            if (!(error instanceof BillingError)) throw error;
+            // Free allowance used up: the party still plays, with crowd voting.
+            delete room.billingAccountId;
+            room.aiOffDuty = true;
+            roomManager.markChanged(code);
+          }
+        }
+      }
+      if (event === 'NEXT_ROUND' && rt.fsm.roundIdx >= 4) {
+        return {
+          ok: false,
+          status: 409,
+          body: apiError(
+            'INVALID_ACTION',
+            'Five rounds complete. Finish this game to start another.',
+          ),
+        };
+      }
       await rt.fsm.dispatch(event, payload);
+      if (event === 'FINISH_GAME' && reservationKey) opts.billing?.completeGame(reservationKey);
       return { ok: true };
     } catch (err) {
+      if (err instanceof BillingError) {
+        return { ok: false, status: err.statusCode, body: apiError('INVALID_ACTION', err.message) };
+      }
       if (err instanceof IllegalTransitionError) {
         return {
           ok: false,
@@ -258,6 +301,10 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
         rt.fsm.phaseEndsAt !== null &&
         rt.fsm.phaseEndsAt - Date.now() > 45_000
       );
+    };
+    roomManager.isLobby = (code) => {
+      const rt = getRuntime(code);
+      return rt === null || rt.fsm.state === 'LOBBY';
     };
     roomManager.onChanged = (code) => {
       const rt = getRuntime(code);
@@ -334,6 +381,34 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
             }
             break;
           }
+          case 'next_judgement': {
+            const advanced = await opts.orchestrator?.nextJudgement(req.params.code);
+            if (advanced === undefined || advanced === 'invalid') {
+              result = {
+                ok: false,
+                status: 409,
+                body: apiError('INVALID_ACTION', 'the current song is not ready to advance'),
+              };
+            } else {
+              result = { ok: true };
+            }
+            break;
+          }
+          case 'close_vote': {
+            const closed = await opts.orchestrator?.closeCrowdVote(req.params.code);
+            result =
+              closed === 'done'
+                ? { ok: true }
+                : {
+                    ok: false,
+                    status: 409,
+                    body: apiError(
+                      'INVALID_ACTION',
+                      closed === 'waiting' ? 'Give everyone time to vote.' : 'No vote is open.',
+                    ),
+                  };
+            break;
+          }
           case 'advance_reveal':
             result = await dispatchAsHost(req.params.code, 'ADVANCE_REVEAL', {
               final: req.body?.final === true,
@@ -377,6 +452,39 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
       },
     );
 
+    app.post<{ Params: { code: string }; Body: { ballotId?: unknown; optionId?: unknown } }>(
+      '/rooms/:code/crowd-vote',
+      { preHandler: rateLimit(hostActionLimiter, 'vote') },
+      async (req, reply) => {
+        const auth = authenticate(roomManager, req.params.code, req);
+        if (!auth)
+          return reply.code(401).send(apiError('NOT_AUTHENTICATED', 'Join the room to vote.'));
+        const { ballotId, optionId } = req.body ?? {};
+        if (
+          typeof ballotId !== 'string' ||
+          typeof optionId !== 'string' ||
+          ballotId.length > 100 ||
+          optionId.length > 100
+        ) {
+          return reply
+            .code(400)
+            .send(apiError('INVALID_ACTION', 'Choose a song from this ballot.'));
+        }
+        const outcome = await opts.orchestrator?.castCrowdVote(
+          req.params.code,
+          auth.playerId,
+          ballotId,
+          optionId,
+        );
+        if (outcome !== 'accepted' && outcome !== 'duplicate') {
+          return reply
+            .code(409)
+            .send(apiError('INVALID_ACTION', 'This vote is no longer available.'));
+        }
+        return reply.send({ ok: true, data: { voted: true } });
+      },
+    );
+
     /**
      * Kick (Phase 3 roster mgmt, backend-spec §5): host-only, DELETE-style POST.
      * Pushes `kicked` + closes the socket (wsHub.kick), then removes the player
@@ -411,41 +519,52 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
         // then remove roster entry (kicked players may NOT reclaim — fresh join only).
         opts.wsHub?.kick(req.params.code, playerId, 'kicked by host');
         room.players.delete(playerId);
+        roomManager.markChanged(req.params.code);
         opts.wsHub?.broadcastStateChange(req.params.code);
         return reply.send({ ok: true as const, data: { kicked: true, playerId } });
       },
     );
 
     /**
-     * Reclaim (TDD §4 edge rules): a disconnected player reclaims their old
-     * identity with a fresh token; the OLD token's hash is replaced so the
-     * stale session dies. Name becomes reusable only after disconnect.
+     * A disconnected player can rotate their own session token. Room codes
+     * and nicknames are public, so neither is proof of ownership: the existing
+     * Bearer token is required even for a disconnected host.
      */
     app.post<{ Params: { code: string }; Body: { nickname?: unknown } }>(
       '/rooms/:code/reclaim',
       { preHandler: rateLimit(reclaimLimiter, 'reclaim') },
       async (req, reply) => {
+        const auth = authenticate(roomManager, req.params.code, req);
+        if (auth === null) {
+          return reply
+            .code(401)
+            .send(apiError('NOT_AUTHENTICATED', 'the existing session token is required'));
+        }
         const nickname = typeof req.body?.nickname === 'string' ? req.body.nickname.trim() : '';
         if (nickname === '') {
           return reply.code(400).send(apiError('INVALID_NICKNAME', 'nickname required'));
         }
-        const room = roomManager.get(req.params.code);
-        if (room === undefined) {
-          return reply.code(404).send(apiError('ROOM_NOT_FOUND', 'no such room'));
+        const player = roomManager.get(req.params.code)?.players.get(auth.playerId);
+        if (player === undefined || player.nickname.toLowerCase() !== nickname.toLowerCase()) {
+          return reply
+            .code(403)
+            .send(apiError('NOT_AUTHENTICATED', 'the session does not own that nickname'));
         }
-        for (const [playerId, player] of room.players) {
-          if (player.nickname.toLowerCase() === nickname.toLowerCase()) {
-            if (player.connected) {
-              return reply.code(409).send(apiError('NAME_TAKEN', 'that player is still connected'));
-            }
-            const { mintToken, hashToken } = await import('../core/tokens.js');
-            const playerToken = mintToken();
-            player.tokenHash = hashToken(playerToken); // invalidates the old session
-            player.connected = true;
-            return reply.send({ ok: true as const, data: { playerToken, playerId, nickname } });
-          }
+        if (player.connected) {
+          return reply.code(409).send(apiError('NAME_TAKEN', 'that player is still connected'));
         }
-        return reply.code(404).send(apiError('ROOM_NOT_FOUND', 'no such nickname to reclaim'));
+        // Keep authentication, rotation and persistence synchronous. A second
+        // request using the same old credential must fail before it can rotate.
+        const playerToken = mintToken();
+        player.tokenHash = hashToken(playerToken);
+        player.connected = true;
+        roomManager.markChanged(req.params.code);
+        opts.wsHub?.broadcastStateChange(req.params.code);
+        void reply.header('cache-control', 'no-store');
+        return reply.send({
+          ok: true as const,
+          data: { playerToken, playerId: auth.playerId, nickname: player.nickname },
+        });
       },
     );
 
@@ -468,6 +587,10 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
     // Controller seam (R1 integration): lets the submissions route read the
     // live phase + dispatch quorum early-fire through the room FSM mutex.
     opts.exposeRuntime?.({
+      forget: (code) => {
+        runtimes.get(code)?.timers.disarmAll();
+        runtimes.delete(code);
+      },
       getRoomPhase: (code) => {
         const rt = getRuntime(code);
         return rt === null ? null : { state: rt.fsm.state, roundIdx: rt.fsm.roundIdx };
@@ -483,5 +606,7 @@ export function gameRuntimesRoute(opts: GameRuntimesOptions): FastifyPluginAsync
         }
       },
     });
+    // Restore the FSM and orchestration before the first reconnect or direct vote.
+    for (const code of store.codes()) getRuntime(code);
   };
 }

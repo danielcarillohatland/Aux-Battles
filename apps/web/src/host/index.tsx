@@ -1,63 +1,126 @@
 /**
  * AUX BATTLES — host entry (host.html).
- * Landing → HostLobby switch; host session persisted in localStorage 'aux:host'
- * so a refresh reclaims the lobby instead of orphaning the room.
+ * Landing → validated restore → HostLobby. A persisted identity never mounts
+ * realtime until the server has confirmed that both room and host token live.
  */
-import { createSignal, Show } from 'solid-js';
+import { createSignal, Match, onMount, Show, Switch } from 'solid-js';
 import { render } from 'solid-js/web';
 import type { CreateRoomResponse } from '@aux/shared';
 import '../shared-ui/shell.css';
 import './host.css';
 import { Landing } from './Landing.js';
 import { HostLobby } from './HostLobby.js';
+import {
+  clearHostRoomSession,
+  createFreshHostRoom,
+  HOST_STORAGE_KEY,
+  restorePersistedHostRoom,
+} from './session.js';
 
-const STORAGE_KEY = 'aux:host';
-
-function loadRoom(): CreateRoomResponse | null {
-  try {
-    // OAuth callback return: ?room=CODE pins the restored session to the room
-    // the host was in when they left to authorize Spotify (server adds it).
-    const url = new URL(window.location.href);
-    const returnRoom = url.searchParams.get('room');
-    if (returnRoom) {
-      // Clean the URL so refreshes don't re-pin forever.
-      url.searchParams.delete('room');
-      window.history.replaceState({}, '', url.toString());
-    }
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const room = JSON.parse(raw) as Partial<CreateRoomResponse>;
-    // Returned for a DIFFERENT stored room: trust the URL, drop the stale one.
-    if (returnRoom && room.code !== undefined && room.code !== returnRoom) {
-      localStorage.removeItem(STORAGE_KEY);
-      return null;
-    }
-    if (
-      typeof room.code === 'string' &&
-      typeof room.hostToken === 'string' &&
-      typeof room.playerId === 'string'
-    ) {
-      return room as CreateRoomResponse;
-    }
-    localStorage.removeItem(STORAGE_KEY);
-    return null;
-  } catch {
-    return null;
-  }
-}
+type StartupState = 'checking' | 'ready' | 'unavailable';
 
 const App = () => {
-  const [room, setRoom] = createSignal<CreateRoomResponse | null>(loadRoom());
+  const [room, setRoom] = createSignal<CreateRoomResponse | null>(null);
+  const [initialTicket, setInitialTicket] = createSignal<string | undefined>();
+  const [startup, setStartup] = createSignal<StartupState>('checking');
+  const [startupIssue, setStartupIssue] = createSignal('Could not reach the server.');
+  let operation = 0;
+
+  const restore = async () => {
+    const current = ++operation;
+    setStartup('checking');
+    const result = await restorePersistedHostRoom();
+    if (current !== operation) return;
+    if (result.status === 'valid') {
+      setInitialTicket(result.ticket);
+      setRoom(result.room);
+      setStartup('ready');
+      return;
+    }
+    setRoom(null);
+    if (result.status === 'unavailable') {
+      setStartupIssue(result.reason);
+      setStartup('unavailable');
+    } else {
+      setStartup('ready');
+    }
+  };
+
+  onMount(() => void restore());
 
   const onCreated = (next: CreateRoomResponse) => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    localStorage.setItem(HOST_STORAGE_KEY, JSON.stringify(next));
+    setInitialTicket(undefined);
     setRoom(next);
+    setStartup('ready');
+  };
+
+  const clearAndReturnToLanding = () => {
+    operation += 1;
+    // Unmounting keyed HostLobby synchronously closes its socket and timers.
+    setRoom(null);
+    setInitialTicket(undefined);
+    clearHostRoomSession();
+    setStartup('ready');
+  };
+
+  const createNewRoom = async () => {
+    operation += 1;
+    setRoom(null);
+    setInitialTicket(undefined);
+    setStartup('checking');
+    try {
+      const next = await createFreshHostRoom();
+      setRoom(next);
+      setStartup('ready');
+    } catch (err) {
+      setStartupIssue(err instanceof Error ? err.message : 'Could not create room.');
+      setStartup('unavailable');
+    }
   };
 
   return (
-    <Show when={room()} fallback={<Landing onCreated={onCreated} />} keyed>
-      {(r) => <HostLobby room={r} />}
-    </Show>
+    <Switch>
+      <Match when={startup() === 'checking'}>
+        <main class="stage recovery" aria-live="polite">
+          <span class="thinking-dots" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+          <p class="muted">Checking host session…</p>
+        </main>
+      </Match>
+      <Match when={startup() === 'unavailable'}>
+        <main class="stage recovery">
+          <div class="notice notice--bad" role="alert">
+            <span>Host session could not be checked. {startupIssue()}</span>
+            <button type="button" class="btn btn--small" onClick={() => void restore()}>
+              Retry
+            </button>
+            <button
+              type="button"
+              class="btn btn--small btn--primary"
+              onClick={() => void createNewRoom()}
+            >
+              New room
+            </button>
+          </div>
+        </main>
+      </Match>
+      <Match when={true}>
+        <Show when={room()} fallback={<Landing onCreated={onCreated} />} keyed>
+          {(r) => (
+            <HostLobby
+              room={r}
+              initialTicket={initialTicket()}
+              onPlayAgain={createNewRoom}
+              onSessionInvalid={clearAndReturnToLanding}
+            />
+          )}
+        </Show>
+      </Match>
+    </Switch>
   );
 };
 

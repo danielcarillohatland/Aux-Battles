@@ -26,6 +26,8 @@ export type PushFrame = DistributiveOmit<ServerFrame, 'ts' | 'seq'>;
 
 export interface WsHubDeps {
   roomManager: RoomManager;
+  /** Explicit app/web origins allowed to connect across the backend origin. */
+  allowedOrigins?: ReadonlySet<string>;
   /**
    * Per-viewer snapshot builder for `state_change` frames (the `you` slice is
    * private per viewer). Defaults to a LOBBY-shaped snapshot from RoomManager;
@@ -47,6 +49,8 @@ export interface WsHub {
   closeRoom(code: string, reason: string): void;
   /** Live connection count (whole hub, or one room). */
   connectionCount(code?: string): number;
+  /** The exact per-viewer snapshot a socket would receive (REST polling fallback). */
+  snapshotFor?(code: string, playerId: string): Snapshot | null;
   /** Post-init snapshot-builder override (tests / controller FSM wiring). */
   setSnapshotBuilder(builder: NonNullable<import('./types.js').WsHubDeps['buildSnapshot']>): void;
 }

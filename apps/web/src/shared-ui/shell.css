@@ -1,37 +1,723 @@
-/* AUX BATTLES — shared shell styling. Phase 4 brings the real theme; keep it fast. */
+/* AUX BATTLES — shared shell: base, type, buttons, notices, stamps (D-034). */
+@import './tokens.css';
+
 :root {
-  color-scheme: dark;
-  font-family:
-    system-ui,
-    -apple-system,
-    'Segoe UI',
-    sans-serif;
+  color-scheme: light;
+  font-family: var(--font-body);
+  -webkit-text-size-adjust: 100%;
 }
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
+}
+html,
+body {
+  min-height: 100%;
+}
+html {
+  background: var(--canvas);
+  scroll-padding-top: calc(var(--safe-top) + 1rem);
+  scroll-padding-bottom: calc(var(--player-dock-height, 0px) + var(--keyboard-bottom, 0px) + 1rem);
 }
 body {
   margin: 0;
-  background: #0b0b12;
-  color: #f2f2f7;
+  background: var(--canvas);
+  color: var(--text);
+  font-size: var(--step-0);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
 }
 #root {
   min-height: 100vh;
-  display: grid;
-  place-items: center;
+  min-height: 100dvh;
+  isolation: isolate;
 }
-.card {
-  padding: 2rem 2.5rem;
-  border: 1px solid #26263a;
-  border-radius: 16px;
-  background: #14141f;
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.035em;
+}
+p {
+  margin: 0;
+}
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+:focus-visible {
+  outline: 3px solid var(--lime);
+  outline-offset: 3px;
+}
+::selection {
+  background: var(--aux);
+  color: var(--label-white);
+}
+
+/* ── Typographic atoms ────────────────────────────────────────────────────── */
+
+/* Small uppercase label above a heading or value ("ROUND 3 · HYPE"). */
+.kicker {
+  font-family: var(--font-display);
+  font-size: var(--step--1);
+  font-weight: 700;
+  letter-spacing: 0.015em;
+  color: var(--text-muted);
+}
+.kicker b,
+.kicker strong {
+  color: var(--aux);
+  font-weight: 800;
+}
+
+/* Poster headline. */
+.display {
+  font-family: var(--font-display);
+  font-weight: 800;
+  line-height: 0.98;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+/* Rotated stamp ("LOCKED", "WINNER"). */
+.stamp {
+  display: inline-block;
+  padding: 0.25em 0.6em;
+  border: 3px solid currentcolor;
+  border-radius: var(--radius-s);
+  font-family: var(--font-display);
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  line-height: 1;
+  color: var(--aux);
+  transform: rotate(-4deg);
+}
+.stamp--lime {
+  color: var(--lime);
+}
+.stamp--cream {
+  color: var(--text);
+}
+
+/* Tag chip (source, status). */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  min-height: 1.9rem;
+  padding: 0.2rem 0.6rem;
+  border: 1.5px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  font-family: var(--font-display);
+  font-size: var(--step--1);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--surface);
+}
+.tag--good {
+  border-color: var(--good);
+  color: var(--good);
+}
+.tag--warn {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.mono {
+  font-variant-numeric: tabular-nums;
+}
+.muted {
+  color: var(--text-muted);
+}
+
+/* ── Tactile controls ────────────────────────────────────────────────────── */
+
+.btn {
+  --btn-bg: var(--surface-alt);
+  --btn-fg: var(--text);
+  --btn-edge: var(--line);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 52px;
+  padding: 0.8rem 1.4rem;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  font-family: var(--font-display);
+  font-size: var(--step-1);
+  font-weight: 800;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  box-shadow: 0 2px 0 var(--btn-edge);
+  transform: translateY(0);
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast);
+  user-select: none;
+  text-decoration: none;
+}
+.btn:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 var(--btn-edge);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: 0 2px 0 var(--btn-edge);
+}
+.btn--primary {
+  --btn-bg: var(--aux);
+  --btn-fg: var(--label-white);
+  --btn-edge: var(--aux-deep);
+}
+.btn--lime {
+  --btn-bg: var(--lime);
+  --btn-fg: var(--label-white);
+  --btn-edge: var(--lime-deep);
+}
+.btn--ghost {
+  --btn-bg: transparent;
+  --btn-fg: var(--text);
+  --btn-edge: transparent;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+.btn--ghost:active:not(:disabled) {
+  transform: none;
+  box-shadow: inset 0 0 0 1px var(--text-muted);
+}
+.btn--block {
+  width: 100%;
+}
+.btn--big {
+  min-height: 64px;
+  font-size: var(--step-2);
+  padding: 1rem 2rem;
+}
+.btn--small {
+  min-height: 44px;
+  padding: 0.5rem 0.9rem;
+  font-size: var(--step-0);
+  box-shadow: 0 3px 0 var(--btn-edge);
+}
+.btn--small:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 var(--btn-edge);
+}
+.btn--icon {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 0.7rem;
+  font-size: var(--step-0);
+}
+
+/* ── Inputs ──────────────────────────────────────────────────────────────── */
+
+.field {
+  width: 100%;
+  min-height: 52px;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--step-1);
+  transition: border-color var(--dur-fast);
+}
+.field::placeholder {
+  color: var(--text-subtle);
+}
+.field:focus {
+  border-color: var(--lime);
+  box-shadow: 0 0 0 3px var(--lime-soft);
+}
+.field--bad {
+  border-color: var(--bad);
+}
+
+/* ── Notices (errors, reconnecting, hints with actions) ──────────────────── */
+
+.notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: 0.75rem 0.9rem;
+  border-left: 4px solid var(--warn);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--step-0);
+  text-align: left;
+}
+.notice > span {
+  flex: 1 1 14rem;
+}
+.notice--bad {
+  border-left-color: var(--bad);
+}
+.notice--info {
+  border-left-color: var(--line-strong);
+}
+.notice .btn {
+  margin-left: auto;
+}
+
+/* ── Judge bullets (host judging, reveal, player result) ─────────────────── */
+
+.judge-bullets {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+  display: grid;
+  gap: var(--space-2);
+}
+.judge-bullets li {
+  position: relative;
+  padding-left: 1.3rem;
+  font-size: var(--step-0);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.judge-bullets li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 1px;
+  background: var(--aux);
+  transform: rotate(45deg);
+}
+.judge-bullets .judge-bullet-label {
+  color: var(--text-muted);
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 0.85em;
+  margin-right: 0.3em;
+}
+.judge-bullets .judge-bullet-verdict {
+  color: var(--text);
+  font-weight: 700;
+}
+.judge-bullets .judge-bullet-verdict::before {
+  background: var(--lime);
+}
+.judge-explanation {
+  color: var(--text-muted);
+  line-height: 1.45;
+  text-align: left;
+}
+
+@media (hover: hover) {
+  .btn:hover:not(:disabled) {
+    filter: brightness(0.96);
+  }
+  .btn--ghost:hover:not(:disabled) {
+    background: var(--surface-alt);
+  }
+}
+
+/* ── Motion helpers ──────────────────────────────────────────────────────── */
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.rise {
+  animation: rise-in var(--dur-base) var(--ease-out) both;
+}
+.pop {
+  animation: pop-in var(--dur-base) var(--ease-spring) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Album-label controls and legible paper surfaces across both clients. */
+.btn {
+  border-radius: 8px;
+  font-weight: 700;
+}
+.btn--ghost {
+  background: var(--surface);
+}
+.tag {
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 600;
+  border-color: var(--line);
+}
+.tag--good {
+  border-color: #b9d2c5;
+  background: #edf5ef;
+}
+.tag--warn {
+  border-color: #e0c79c;
+  background: #fff5e5;
+}
+.notice {
+  background: #fff5e5;
+}
+.notice--bad {
+  background: #fcecef;
+}
+.notice--info {
+  background: var(--surface-alt);
+}
+.field {
+  background: var(--surface);
+}
+.judge-bullets .judge-bullet-label {
+  letter-spacing: 0;
+  text-transform: none;
+}
+.host-account-card {
+  width: 100%;
+  display: grid;
+  gap: 0.65rem;
+  padding: 1rem 1.1rem;
+  border: var(--rule);
+  border-left: 3px solid var(--cobalt);
+  border-radius: 4px 10px 10px 4px;
+  background: var(--surface);
+  text-align: left;
+  font-size: 0.82rem;
+}
+.host-account-card h2,
+.host-account-card h3,
+.host-account-card strong {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  line-height: 1.3;
+}
+.host-account-card p {
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.host-account-card .field {
+  min-height: 44px;
+  font-size: 0.9rem;
+}
+.judge-picker {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  text-align: left;
+}
+.judge-picker legend {
+  margin-bottom: 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+.judge-picker label {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  min-height: 44px;
+  padding: 0.8rem 0.9rem;
+  border: var(--rule);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  cursor: pointer;
+}
+.judge-picker__option--on {
+  border-color: var(--cobalt) !important;
+  box-shadow: inset 0 0 0 1px var(--cobalt);
+}
+.judge-picker input {
+  margin-top: 0.2rem;
+  accent-color: var(--cobalt);
+}
+.judge-picker strong {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 1rem;
+}
+.judge-picker small {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+@media (max-width: 420px) {
+  .judge-picker {
+    grid-template-columns: 1fr;
+  }
+}
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.account-actions .btn {
+  min-height: 44px;
+  padding: 0.55rem 0.85rem;
+  font-size: 0.82rem;
+}
+.account-status,
+.account-balance {
+  color: var(--cobalt);
+  font-weight: 700;
+}
+.host-account-card details {
+  color: var(--text-muted);
+}
+.host-account-card summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.host-account-card [role='alert'] {
+  color: var(--bad);
+}
+
+/* Crowd judging uses the same track list on the host and each phone. */
+.crowd-vote {
+  gap: 1.1rem;
+}
+.crowd-vote h1,
+.crowd-vote h2 {
+  font-size: var(--step-3);
+}
+.crowd-vote-count {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+.crowd-vote-options {
+  display: grid;
+  gap: 0.65rem;
+  width: 100%;
+}
+.crowd-vote-options .track-card {
+  border-radius: 6px;
+  min-height: 86px;
+}
+.crowd-vote-options .track-card.is-selected {
+  border-color: var(--cobalt);
+  box-shadow: inset 3px 0 var(--cobalt);
+}
+.crowd-vote-confirmed {
+  padding: 1rem 1.1rem;
+  width: 100%;
+  border: 1px solid #b9d2c5;
+  border-radius: var(--radius-m);
+  background: #edf5ef;
+  color: var(--good);
+  font-weight: 600;
   text-align: center;
 }
-h1 {
-  margin: 0 0 0.25rem;
-  letter-spacing: 0.08em;
+.crowd-vote-policy {
+  width: 100%;
+  text-align: left;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.6;
 }
-p.sub {
-  margin: 0.25rem 0 0;
-  color: #9b9bb4;
+.crowd-vote-policy summary {
+  cursor: pointer;
+  padding: 0.5rem 0;
+  font-weight: 600;
+}
+.crowd-vote-close {
+  width: 100%;
+}
+.btn--ink {
+  --btn-bg: var(--text);
+  --btn-fg: var(--label-white);
+  --btn-edge: #11120f;
+}
+.btn--danger {
+  --btn-bg: var(--bad);
+  --btn-fg: var(--label-white);
+  --btn-edge: #8f2231;
+}
+.account-actions label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.account-actions input[type='checkbox'] {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--cobalt);
+}
+
+/* Let iOS Dynamic Type change the rem scale while retaining the brand faces. */
+@supports (font: -apple-system-body) {
+  @media (any-pointer: coarse) {
+    :root {
+      font: -apple-system-body;
+      font-family: var(--font-body);
+    }
+  }
+}
+
+/* Long names, accessibility text sizes, and touch controls remain usable. */
+input,
+textarea,
+select {
+  max-width: 100%;
+}
+input.field,
+textarea.field,
+select.field {
+  min-width: 0;
+  scroll-margin-block: 1rem;
+}
+textarea.field {
+  overflow-y: auto;
+}
+:where(h1, h2, h3, p, blockquote) {
+  overflow-wrap: anywhere;
+}
+:where(.account-actions, .notice) > * {
+  min-width: 0;
+}
+summary {
+  touch-action: manipulation;
+}
+@media (any-pointer: coarse) {
+  input.field:not(.p-code),
+  textarea.field,
+  select.field {
+    font-size: max(16px, 1rem);
+  }
+  .btn--small,
+  .btn--icon,
+  .account-actions .btn,
+  .host-account-card summary,
+  .crowd-vote-policy summary,
+  a.tag {
+    min-height: 44px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rv-flash {
+    display: none;
+  }
+}
+
+/* The agreed feeling for the scene: one target for players and the judge. */
+.vibe-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.6rem;
+  margin: 0.6rem 0 0;
+  color: var(--text);
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+.vibe-line__label {
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  background: var(--coral);
+  color: var(--label-white);
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.vibe-line__text {
+  font-weight: 600;
+}
+.poster-vibe {
+  margin-top: 1.4rem;
+  font-size: clamp(1.1rem, 0.9rem + 1vw, 1.6rem);
+}
+.p-brief {
+  margin: 0.25rem 0 0.75rem;
+  padding: 0.7rem 0.85rem;
+  border: var(--rule);
+  border-left: 3px solid var(--coral);
+  border-radius: 4px var(--radius-m) var(--radius-m) 4px;
+  background: var(--surface);
+}
+.p-brief-scene {
+  margin: 0;
+  font-weight: 650;
+  line-height: 1.35;
+}
+.p-brief .vibe-line {
+  margin-top: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.crowd-vote-notice {
+  margin: 0.25rem 0 0.5rem;
+  color: var(--coral);
+  font-weight: 650;
 }

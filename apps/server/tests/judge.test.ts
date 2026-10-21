@@ -1,8 +1,7 @@
 /**
- * Phase-4 judge property tests (TDD §8/§11): permutation/coverage/clamp
- * invariants over randomized rounds, fallback determinism, malformed-output
- * retry ladder — plus the orchestrator wiring smoke (judgeRound behind the
- * LLMProvider seam, ResultsStore persistence, `judgement` WS broadcast).
+ * Judge tests (TDD §8/§11): prompt calibration, failure semantics,
+ * and the orchestrator wiring smoke (judgeTrack behind the LLMProvider seam,
+ * ResultsStore persistence, `judgement` WS broadcast).
  */
 import { describe, expect, it } from 'vitest';
 import type { Track } from '@aux/shared';
@@ -19,263 +18,73 @@ import type {
   LlmCompleteRequest,
   LlmCompleteResponse,
 } from '../src/judge/llm-provider.js';
-import { FALLBACK_MODEL, judgeRound } from '../src/judge/service.js';
+import { judgeTrack } from '../src/judge/service.js';
 import { RoomFsm } from '../src/fsm/engine.js';
 import type { PushFrame, WsHub, WsViewer } from '../src/ws/types.js';
 
-// ── Deterministic randomness (seeded; CI-stable) ─────────────────────────────
-
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function shuffleWith<T>(items: T[], rand: () => number): T[] {
-  const out = [...items];
-  for (let i = out.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(rand() * (i + 1));
-    [out[i], out[j]] = [out[j]!, out[i]!];
-  }
-  return out;
-}
-
-interface SongSpec {
-  id: string;
-  title: string;
-  artist: string;
-}
-
-/** Random song batch: sizes 1..12, noisy unicode-ish titles/artists. */
-function randomSongs(rand: () => number): SongSpec[] {
-  const n = 1 + Math.floor(rand() * 12);
-  return Array.from({ length: n }, (_, i) => ({
-    id: `t${i}-${Math.floor(rand() * 1e9)}`,
-    title: [`Song ${i}`, 'DJ "$hadow"', 'line\nbreak', 'emoji 🎉 pick'][Math.floor(rand() * 4)]!,
-    artist: [`Artist ${i}`, 'The 1975', 'Sigur Rós'][Math.floor(rand() * 3)]!,
-  }));
-}
-
-/** Attach the 0-based songIndex the judge contract keys results by. */
-const numbered = (songs: readonly SongSpec[]) => songs.map((song, index) => ({ ...song, index }));
-
-// ── Provider doubles ──────────────────────────────────────────────────────────
-
-type Row = { songIndex: number; score: number; explanation: string };
-
-/** Serves the given rows per call (cycled), wrapped as an LLM response. */
-function scriptedProvider(script: Row[][], model = 'test-model'): LLMProvider {
-  let call = 0;
-  return {
-    async complete(): Promise<LlmCompleteResponse> {
-      const rows = script[Math.min(call, script.length - 1)]!;
-      call += 1;
-      return { text: JSON.stringify({ judgements: rows }), model };
-    },
-  };
-}
-
-/** Valid full-coverage judgement for one song batch, scores by spec order. */
-function fullCoverage(songs: readonly SongSpec[], scores: readonly number[]): Row[] {
-  return songs.map((song, i) => ({
-    songIndex: i,
-    score: scores[i % scores.length]!,
-    explanation: `verdict ${i}`,
-  }));
-}
-
-class GarbageProvider implements LLMProvider {
-  calls = 0;
-  constructor(private readonly body = '{"judgements": [{"songIndex": 0,' /* truncated */) {}
-  async complete(): Promise<LlmCompleteResponse> {
-    this.calls += 1;
-    return { text: this.body, model: 'broken' };
-  }
-}
-
-// ── Property helpers ──────────────────────────────────────────────────────────
-
-function expectVerdictWellFormed(
-  output: Awaited<ReturnType<typeof judgeRound>>,
-  songs: readonly SongSpec[],
-): void {
-  const { results } = output;
-  // Coverage: every song judged exactly once.
-  expect(results).toHaveLength(songs.length);
-  const seen = new Set<number>();
-  for (const row of results) seen.add(row.songIndex);
-  expect(seen.size).toBe(songs.length);
-  expect([...seen].sort((a, b) => a - b)).toEqual(songs.map((_, i) => i));
-  // Ranks are a permutation of 1..N.
-  expect([...results].map((r) => r.rank).sort((a, b) => a - b)).toEqual(songs.map((_, i) => i + 1));
-  // Scores clamped to 0..100 integers; rank order agrees with score order.
-  for (const row of results) {
-    expect(Number.isInteger(row.score)).toBe(true);
-    expect(row.score).toBeGreaterThanOrEqual(0);
-    expect(row.score).toBeLessThanOrEqual(100);
-    expect(row.explanation.length).toBeGreaterThan(0);
-  }
-  const byRank = [...results].sort((a, b) => a.rank - b.rank);
-  for (let i = 1; i < byRank.length; i += 1) {
-    const prev = byRank[i - 1]!;
-    const cur = byRank[i]!;
-    expect(prev.score).toBeGreaterThanOrEqual(cur.score);
-  }
-}
-
-// ── Properties over judgeRound ────────────────────────────────────────────────
-
-describe('judgeRound properties (TDD §11)', () => {
-  const rand = mulberry32(20260826);
-
-  it('ranks are a permutation of 1..N and every song is covered exactly once', async () => {
-    for (let round = 0; round < 40; round += 1) {
-      const songs = randomSongs(rand);
-      const scores = songs.map(() => Math.floor(rand() * 101));
-      const llm = scriptedProvider([fullCoverage(songs, scores)]);
-      const output = await judgeRound(
-        { scenario: 'songs for a heist getaway', songs: numbered(songs) },
-        llm,
-        { backoffMs: 1, timeoutMs: 50 },
-      );
-      expect(output.model).toBe('test-model');
-      expectVerdictWellFormed(output, songs);
-      // Input order must not matter: shuffle → same invariant holds.
-      const shuffled = shuffleWith(songs, rand);
-      const reshuffledOutput = await judgeRound({ scenario: 'x', songs: numbered(shuffled) }, llm, {
-        backoffMs: 1,
-        timeoutMs: 50,
-      });
-      expectVerdictWellFormed(reshuffledOutput, shuffled);
-    }
-  });
-
-  it('accepts boundary scores 0 and 100 and clamps everything into range', async () => {
-    const songs: SongSpec[] = [
-      { id: 'low', title: 'Silence', artist: 'Everyone' },
-      { id: 'high', title: 'Bangers Only', artist: 'Louder' },
-    ];
-    const output = await judgeRound(
-      { scenario: 'library quiet hours', songs: numbered(songs) },
-      scriptedProvider([
-        [
-          { songIndex: 0, score: 0, explanation: 'silent' },
-          { songIndex: 1, score: 100, explanation: 'loud' },
-        ],
-      ]),
-    );
-    expect(output.results.map((r) => r.score).sort((a, b) => a - b)).toEqual([0, 100]);
-
-    // Fallback path obeys the same clamp property (run against the fallback too).
-    for (let round = 0; round < 25; round += 1) {
-      const batch = randomSongs(rand);
-      const fallback = await judgeRound(
-        { scenario: `s${round}`, songs: numbered(batch) },
-        undefined,
-      );
-      expectVerdictWellFormed(fallback, batch);
-    }
-  });
-
-  it('fallback judge is deterministic for identical inputs', async () => {
-    const songs: SongSpec[] = Array.from({ length: 9 }, (_, i) => ({
-      id: `track-${i}`,
-      title: `Song ${i}`,
-      artist: `Artist ${i % 3}`,
-    }));
-    const noLlmA = await judgeRound(
-      { scenario: 'rainy commute', songs: numbered(songs) },
-      undefined,
-    );
-    const noLlmB = await judgeRound(
-      { scenario: 'rainy commute', songs: numbered(songs) },
-      undefined,
-    );
-    expect(noLlmA).toEqual(noLlmB);
-    expect(noLlmA.model).toBe(FALLBACK_MODEL);
-
-    // A failing vendor degrades into the SAME deterministic verdict.
-    const dead = new GarbageProvider('not json at all {{{');
-    const degradedA = await judgeRound(
-      { scenario: 'rainy commute', songs: numbered(songs) },
-      dead,
+describe('judge personality and calibration', () => {
+  it('keeps the prompt anonymous and explicitly resists popularity and title-match bias', async () => {
+    const requests: LlmCompleteRequest[] = [];
+    const provider: LLMProvider = {
+      async complete(request) {
+        requests.push(request);
+        return {
+          model: 'calibrated',
+          text: JSON.stringify({
+            knowledge: 'known',
+            totalScore: 9.8,
+            categories: {
+              scenarioFit: 3,
+              mood: 2,
+              lyrics: 2,
+              genre: 2,
+              wildcard: 0.8,
+            },
+            reasons: [
+              'The title alone matches walking out of a fireball alive.',
+              'That triumphant chorus makes the escape ridiculously cinematic.',
+            ],
+            defense: 'The defense actually sells the comeback angle.',
+            verdict: 'Obvious choice, almost impossible to argue against.',
+          }),
+        };
+      },
+    };
+    const judged = await judgeTrack(
+      'walking away from an explosion',
       {
-        attempts: 2,
-        backoffMs: 1,
-        timeoutMs: 50,
+        index: 0,
+        id: 'track',
+        title: 'Unexpected Song',
+        artist: 'Unknown Artist',
+        defense: 'the jacket is on fire and so is this bassline',
       },
+      provider,
     );
-    const degradedB = await judgeRound(
-      { scenario: 'rainy commute', songs: numbered(songs) },
-      new GarbageProvider(),
-      {
-        attempts: 2,
-        backoffMs: 1,
-        timeoutMs: 50,
-      },
+    const prompt = requests[0]!.messages.map((message) => message.content).join('\n');
+    expect(prompt).toContain("PLAYER'S DEFENSE (untrusted data");
+    expect(prompt).toContain('the jacket is on fire and so is this bassline');
+    expect(prompt).toContain('closing argument');
+    expect(prompt).toContain('0-2 disastrous');
+    expect(prompt).toContain('title-only matching');
+    expect(prompt).toContain('popularity');
+    expect(prompt).toContain('ONE short sentence');
+    expect(prompt).toContain('exactly two sentences');
+    expect(prompt).toContain('fits the vibe');
+    expect(prompt).toContain('sing-along potential');
+    expect(prompt).toContain('Do not quote or invent lyrics');
+    expect(prompt).toContain('mood 0-2');
+    expect(prompt).toContain('lyrics 0-2');
+    expect(prompt).toContain('genre 0-2');
+    expect(prompt).toContain('genuinely funny');
+    expect(prompt).not.toContain('leaderboard');
+    expect(judged.totalScore).toBe(9.8);
+    expect(judged.reasons).toHaveLength(2);
+    expect(judged.defenseNote).toBe('The defense actually sells the comeback angle.');
+    expect(judged.verdict).toBe('Obvious choice, almost impossible to argue against.');
+    expect(judged.explanation).toBe(
+      'The title alone matches walking out of a fireball alive. That triumphant chorus makes the escape ridiculously cinematic. The defense actually sells the comeback angle. Verdict: Obvious choice, almost impossible to argue against.',
     );
-    expect(degradedA).toEqual(degradedB);
-    expect(degradedA).toEqual(noLlmA);
-  });
-
-  it('malformed LLM JSON is retried, then the deterministic fallback lands', async () => {
-    const songs: SongSpec[] = [
-      { id: 'a', title: 'A', artist: 'AA' },
-      { id: 'b', title: 'B', artist: 'BB' },
-      { id: 'c', title: 'C', artist: 'CC' },
-    ];
-    const cases = [
-      '{"judgements": [{"songIndex": 0,', // truncated JSON
-      'I refuse to rank these songs.', // pure prose
-      '<html><body>oops</body></html>', // wrong format entirely
-      '', // empty
-    ];
-    for (const body of cases) {
-      const llm = new GarbageProvider(body);
-      const output = await judgeRound({ scenario: 's', songs: numbered(songs) }, llm, {
-        attempts: 3,
-        backoffMs: 1,
-        timeoutMs: 50,
-      });
-      expect(llm.calls).toBe(3);
-      expect(output.model).toBe(FALLBACK_MODEL);
-      expect(output).toEqual(
-        await judgeRound({ scenario: 's', songs: numbered(songs) }, undefined),
-      );
-      expectVerdictWellFormed(output, songs);
-    }
-  });
-
-  it('tolerant parser accepts fenced and prose-wrapped verdicts', async () => {
-    const songs: SongSpec[] = [
-      { id: 'x', title: 'X', artist: 'XX' },
-      { id: 'y', title: 'Y', artist: 'YY' },
-    ];
-    const inner = JSON.stringify({
-      judgements: [
-        { songIndex: 0, score: 42, explanation: 'mid' },
-        { songIndex: 1, score: 96, explanation: 'banger' },
-      ],
-    });
-    const wrap = (text: string): LLMProvider => ({
-      async complete(): Promise<LlmCompleteResponse> {
-        return { text, model: 'wrapped-model' };
-      },
-    });
-    for (const text of [
-      inner,
-      '```json\n' + inner + '\n```',
-      'Here you go:\n' + inner + '\nHope that helps!',
-    ]) {
-      const output = await judgeRound({ scenario: 's', songs: numbered(songs) }, wrap(text));
-      expect(output.model).toBe('wrapped-model');
-      expect(output.results.map((r) => r.rank).sort()).toEqual([1, 2]);
-      expect(output.results.find((r) => r.songIndex === 1)?.score).toBe(96);
-    }
   });
 });
 
@@ -333,7 +142,7 @@ const viewer = (playerId: string): WsViewer => ({
 const tick = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** LOBBY → … → PLAYBACK room with submissions, results store and an LLM seam. */
-async function judgedRoom(llm: LLMProvider | undefined, aiJudgingMs = 400) {
+async function judgedRoom(llm: LLMProvider | undefined) {
   const roomManager = new RoomManager();
   const { hub, frames } = stubHub();
   const rows: StoredSubmission[] = [];
@@ -345,15 +154,12 @@ async function judgedRoom(llm: LLMProvider | undefined, aiJudgingMs = 400) {
     ...(llm !== undefined ? { llm } : {}),
     submissions,
     results: resultsStore,
+    excerptDurationMs: 5,
   });
   const host = roomManager.createRoom();
   const ada = roomManager.joinRoom(host.code, 'Ada');
   rows.push(sub(host.code, 0, ada.playerId, 't1'), sub(host.code, 0, ada.playerId, 't2'));
-  const fsm = new RoomFsm({
-    code: host.code,
-    durations: { AI_JUDGING: aiJudgingMs },
-    onChange: (change) => orch.onTransition(change),
-  });
+  const fsm = new RoomFsm({ code: host.code, onChange: (change) => orch.onTransition(change) });
   orch.register(host.code, fsm);
   await fsm.dispatch('START_GAME');
   await fsm.dispatch('PICK_CATEGORY', { category: 'heist' });
@@ -364,33 +170,49 @@ async function judgedRoom(llm: LLMProvider | undefined, aiJudgingMs = 400) {
   return { roomManager, orch, resultsStore, code: host.code, fsm, frames, ada };
 }
 
-describe('orchestrator × judgeRound wiring', () => {
-  it('stores validated results, broadcasts the verdict frame, reaches RESULTS', async () => {
+describe('orchestrator × sequential judgeTrack wiring', () => {
+  it('judges anonymously one track at a time, then stores and broadcasts the ranking', async () => {
     const prompts: LlmCompleteRequest[] = [];
+    let call = 0;
     const llm: LLMProvider = {
       async complete(req) {
         prompts.push(req);
+        call += 1;
+        const high = call === 1;
         return {
           text: JSON.stringify({
-            judgements: [
-              { songIndex: 0, score: 88, explanation: 'getaway gold' },
-              { songIndex: 1, score: 12, explanation: 'engine trouble' },
-            ],
+            knowledge: 'known',
+            totalScore: high ? 9 : 3,
+            categories: high
+              ? { scenarioFit: 3, mood: 2, lyrics: 1, genre: 2, wildcard: 1 }
+              : { scenarioFit: 1, mood: 1, lyrics: 0, genre: 0, wildcard: 1 },
+            reasons: high
+              ? ['Getaway gold.', 'Sirens in the hook.']
+              : ['Engine trouble.', 'Wrong gear.'],
+            defense: 'No defense filed.',
+            verdict: high ? 'Drive.' : 'Stall.',
           }),
           model: 'vendor-x',
         };
       },
     };
     const { code, fsm, frames, resultsStore, ada, orch } = await judgedRoom(llm);
-    await tick(60);
+    await tick(20);
+    expect(fsm.state).toBe('AI_JUDGING');
+    expect(orch.buildSnapshot(code, viewer(ada.playerId))?.judgingStatus).toBe('revealed');
+    expect(await orch.nextJudgement(code)).toBe('advanced');
+    await tick(20);
+    expect(fsm.state).toBe('AI_JUDGING');
+    expect(await orch.nextJudgement(code)).toBe('done');
     expect(fsm.state).toBe('RESULTS');
 
-    // ONE batched call carrying the checkpoint scenario + both songs.
-    expect(prompts).toHaveLength(1);
-    const userTurn = prompts[0]!.messages.find((m) => m.role === 'user')!.content;
-    expect(userTurn).toContain('heist');
-    expect(userTurn).toContain('"T t1"');
-    expect(userTurn).toContain('"T t2"');
+    expect(prompts).toHaveLength(2);
+    for (const prompt of prompts) {
+      const userTurn = prompt.messages.find((m) => m.role === 'user')!.content;
+      expect(userTurn).toContain('heist');
+      expect(userTurn.match(/^SONG: /gm) ?? []).toHaveLength(1);
+      expect(userTurn).not.toContain('Ada');
+    }
 
     // §6 rows persisted worst-first via core/results.ts + rank-point board.
     const stored = resultsStore.list(roundIdOf(code, 0));
@@ -404,8 +226,8 @@ describe('orchestrator × judgeRound wiring', () => {
     expect(verdicts).toHaveLength(1);
     const payload = (verdicts[0]!.frame as Extract<PushFrame, { t: 'judgement' }>).payload;
     expect(payload?.results.map((r) => [r.rank, r.score, r.nickname])).toEqual([
-      [1, 88, 'Ada'],
-      [2, 12, 'Ada'],
+      [1, 90, 'Ada'],
+      [2, 30, 'Ada'],
     ]);
     expect(payload?.results.every((r) => r.title.startsWith('T '))).toBe(true);
 
@@ -414,40 +236,58 @@ describe('orchestrator × judgeRound wiring', () => {
     expect(snap?.resultCount).toBe(2);
   });
 
-  it('no LLM configured → deterministic fallback still lands in RESULTS', async () => {
-    const { fsm, frames, resultsStore, ada } = await judgedRoom(undefined);
-    await tick(60);
+  it('one-player offline round finishes without inventing scores or awarding points', async () => {
+    const { fsm, frames, resultsStore, ada, orch } = await judgedRoom(undefined);
+    await tick(20);
     expect(fsm.state).toBe('RESULTS');
     const stored = resultsStore.list(roundIdOf(fsm.code, 0));
     expect(stored).toHaveLength(2);
-    expect(stored.every((row) => row.judgeModel === FALLBACK_MODEL)).toBe(true);
+    expect(stored.every((row) => row.judgeModel === 'crowd-no-votes')).toBe(true);
     const verdict = frames.find((f) => f.frame.t === 'judgement');
     expect(verdict).toBeDefined();
     const payload = (verdict!.frame as Extract<PushFrame, { t: 'judgement' }>).payload;
-    expect(new Set(payload?.results.map((r) => r.rank))).toEqual(new Set([1, 2]));
-    expect(ada.playerId).toBeTruthy();
+    expect(new Set(payload?.results.map((r) => r.rank))).toEqual(new Set([1]));
+    expect(resultsStore.leaderboard(fsm.code)).toEqual([
+      { playerId: ada.playerId, points: 0, wins: 0 },
+    ]);
+    expect(orch.buildSnapshot(fsm.code, viewer(ada.playerId))?.leaderboard?.[0]?.totalScore).toBe(
+      0,
+    );
   });
 
-  it('LLM slower than the deadline → failsafe fallback advances the round', async () => {
+  it('rejects a stalled provider at the service deadline instead of inventing a score', async () => {
     const stalled: LLMProvider = {
       complete: () => new Promise<LlmCompleteResponse>(() => {}),
     };
-    const { fsm, frames, resultsStore } = await judgedRoom(stalled, 80);
-    await tick(250);
-    expect(fsm.state).toBe('RESULTS'); // 20 s failsafe logic at test scale
-    const stored = resultsStore.list(roundIdOf(fsm.code, 0));
-    expect(stored.every((row) => row.judgeModel === FALLBACK_MODEL)).toBe(true);
-    expect(frames.filter((f) => f.frame.t === 'judgement')).toHaveLength(1);
+    await expect(
+      judgeTrack(
+        'slow-motion getaway',
+        { index: 0, id: 'stall', title: 'Still', artist: 'Waiting' },
+        stalled,
+        { attempts: 1, timeoutMs: 5 },
+      ),
+    ).rejects.toMatchObject({ code: 'timeout' });
   });
 
-  it('throwing LLM adapter still reaches RESULTS via the fallback path', async () => {
+  it('reports a throwing adapter once per attempt and rejects with the cause', async () => {
     const bomb: LLMProvider = {
+      providerName: 'test-vendor',
+      modelName: 'test-model',
       complete: () => Promise.reject(new Error('socket exploded')),
     };
-    // Retry backoff outlives the phase deadline → failsafe must win.
-    const { fsm, resultsStore } = await judgedRoom(bomb, 100);
-    await tick(300);
-    expect(fsm.state).toBe('RESULTS');
-    expect(resultsStore.count(roundIdOf(fsm.code, 0))).toBe(2);
+    const song = { index: 0, id: 'bomb', title: 'Boom', artist: 'Crash' };
+    const failures: Array<Record<string, unknown>> = [];
+    await expect(
+      judgeTrack('exploding building', song, bomb, {
+        attempts: 2,
+        backoffMs: 0,
+        timeoutMs: 20,
+        onFailure: (failure) => failures.push(failure),
+      }),
+    ).rejects.toThrow('socket exploded');
+    expect(failures).toMatchObject([
+      { attempt: 1, provider: 'test-vendor', model: 'test-model' },
+      { attempt: 2, provider: 'test-vendor', model: 'test-model' },
+    ]);
   });
 });

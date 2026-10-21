@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f7f5ee" />
+    <title>Privacy · AUX BATTLES</title>
+    <meta
+      name="description"
+      content="What AUX BATTLES stores, what it sends to the AI judge, and for how long."
+    />
+    <link rel="icon" type="image/png" href="/assets/dj-aux-head.png" />
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        background: #f7f5ee;
+        color: #23241f;
+        font:
+          1rem/1.6 system-ui,
+          -apple-system,
+          'Segoe UI',
+          Roboto,
+          sans-serif;
+      }
+      main {
+        max-width: 42rem;
+        margin: 0 auto;
+        padding: 3rem 1rem 4rem;
+      }
+      h1 {
+        font-size: 2rem;
+        line-height: 1.15;
+        margin: 0 0 0.25rem;
+      }
+      h2 {
+        font-size: 1.15rem;
+        margin: 2rem 0 0.4rem;
+      }
+      p,
+      li {
+        color: #3d3f39;
+      }
+      .updated {
+        color: #6c6e66;
+        font-size: 0.9rem;
+      }
+      a {
+        color: #304bc7;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p><a href="/host.html">← Back to AUX BATTLES</a></p>
+      <h1>Privacy</h1>
+      <p class="updated">Last updated 21 October 2026</p>
+      <p>
+        AUX BATTLES is a free, non-commercial party game made as a personal portfolio project. There
+        are no accounts, no ads and no tracking cookies. This page explains what the game handles
+        while you play.
+      </p>
+
+      <h2>What you give the game</h2>
+      <ul>
+        <li>A nickname you choose when you join a room.</li>
+        <li>The songs you pick (title and artist) and the short defense you may write.</li>
+        <li>Crowd votes, if the room votes instead of the AI judge.</li>
+      </ul>
+
+      <h2>The AI judge</h2>
+      <p>
+        In rooms judged by DJ AUX, each pick's title, artist and defense, together with the round's
+        scenario, is sent to <a href="https://openrouter.ai/privacy">OpenRouter</a>, which forwards
+        it to an AI model provider to score the pick. Nicknames are not sent. Players agree to this
+        when they join an AI room. The AI never hears audio. If you would rather not share your
+        picks, ask the host to choose "The room" (crowd voting) instead.
+      </p>
+
+      <h2>How long it is kept</h2>
+      <ul>
+        <li>
+          Room state (nicknames, picks, defenses, scores) is kept only while the room is live, so
+          the game survives a server restart. A room is deleted after 4 hours, or 10 minutes after
+          everyone has left.
+        </li>
+        <li>
+          Your phone or browser stores a session token so you can reconnect to the same room. It is
+          removed when you start over and is useless once the room is gone.
+        </li>
+        <li>
+          Usage counts (for example "a room was created" or "a round finished") are stored with the
+          room code only, never names or songs, to see whether the game works.
+        </li>
+        <li>
+          Server logs, kept by the hosting provider for a short time, may include IP addresses for
+          security and abuse prevention.
+        </li>
+      </ul>
+
+      <h2>Reports</h2>
+      <p>
+        If you report a player's name or defense from the "Help &amp; privacy" panel, the reported
+        text and your optional note are stored privately so the operator can review them.
+      </p>
+
+      <h2>Music</h2>
+      <p>
+        Song links open in services like Apple Music or YouTube, which have their own privacy
+        policies. Song search may use a public music catalog; only the search text is sent.
+      </p>
+
+      <h2>Questions</h2>
+      <p>
+        Contact the developer through the portfolio site that linked you here. You can ask what is
+        stored about a room or for a report to be deleted.
+      </p>
+    </main>
+  </body>
+</html>

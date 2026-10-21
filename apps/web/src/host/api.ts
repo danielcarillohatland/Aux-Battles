@@ -1,9 +1,11 @@
+import { requestWithDeadline } from '../config/request.js';
 /**
  * AUX BATTLES — host REST client.
  * Every response uses the shared {ok,data} / {ok,error} envelope (@aux/shared).
  * Failures throw HostApiError with a stable code; UI maps codes to copy in errors.ts.
  */
 import type { ErrorCode } from '@aux/shared';
+import { apiUrl } from '../config/endpoints.js';
 
 export type HostErrorCode = ErrorCode | 'NETWORK';
 
@@ -24,7 +26,7 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
   const hasJsonBody = typeof init?.body === 'string';
   let res: Response;
   try {
-    res = await fetch(path, {
+    res = await requestWithDeadline(apiUrl(path), {
       ...init,
       headers: {
         ...(hasJsonBody ? { 'content-type': 'application/json' } : {}),

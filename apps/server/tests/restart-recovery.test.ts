@@ -15,7 +15,12 @@ describe('process restart recovery', () => {
     const dir = mkdtempSync(join(tmpdir(), 'aux-restart-'));
     dirs.push(dir);
     const db = join(dir, 'rooms.sqlite');
-    const env = { LOG_LEVEL: 'error', AUX_DB_FILE: db, AUX_DEV_MODE: '0' };
+    const env = {
+      LOG_LEVEL: 'error',
+      AUX_DB_FILE: db,
+      AUX_DEV_MODE: '0',
+      AUX_ENABLE_ORIGINALS: '1',
+    };
 
     const first = await buildServer(env);
     const created = await first.app.inject({ method: 'POST', url: '/api/v1/rooms', payload: {} });
@@ -47,7 +52,11 @@ describe('process restart recovery', () => {
       headers: { authorization: `Bearer ${player.playerToken}` },
       payload: {
         clientMsgId: 'restart-msg-0001',
-        track: { id: 'restart-track', title: 'Still Alive', artist: 'The Process' },
+        track: {
+          id: 'original:sunday-fast-forward',
+          title: 'Ignored client title',
+          artist: 'Ignored client artist',
+        },
       },
     });
     await first.app.close();

@@ -1,0 +1,3 @@
+// Generated signing-team setting is public; signing keys stay in Xcode/Keychain.
+#include? "Release.local.xcconfig"
+CAPACITOR_DEBUG = false

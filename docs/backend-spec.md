@@ -1,5 +1,7 @@
 # AUX BATTLES — Backend & API Specification (MVP)
 
+> **Historical design document (August 2026).** Kept for decision history. Parts no longer match the shipped system (Spotify, Postgres/Drizzle, Playwright, "no accounts or payments"). Current sources: [README](../README.md), [TDD](TDD.md), [DECISIONS](DECISIONS.md), [AI judge](ai-judge.md), [billing](billing.md), [DEPLOY](../DEPLOY.md).
+
 **Stack decision: Node.js 20 + TypeScript, Fastify (REST) + `ws` (WebSocket), PostgreSQL (via Drizzle ORM), single process per region, Redis optional-but-skippable at MVP.**
 
 Justification:

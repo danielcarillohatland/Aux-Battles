@@ -1,34 +1,16 @@
 /**
- * AUX BATTLES — the Reveal (frontend-spec §5 / TDD §9: "the reveal is the product").
- * Self-playing worst→best choreography on the host screen:
+ * AUX BATTLES — the Reveal (TDD §9: "the reveal is the product").
+ * Worst→best choreography on the host screen, mirrored to players through the
+ * server: every beat asks the server to reveal one more result; the snapshot
+ * brings it back and the card slams in. The winner stays on screen with its
+ * bullets until the host presses Continue, which closes the round.
  *
- *   drumroll → LAST PLACE slam (screen shake) → accelerating mid-ranks →
- *   TOP-2 freeze (blurred ghost cards + heartbeat) → riser →
- *   winner white-flash + crown drop + CSS-only confetti ×3.
- *
- * Beat engine: every beat runs entrance animation + a fixed 600 ms gap, so a
- * beat lands ≈1.1–1.2 s and the dead air between beats never exceeds 600 ms.
- * Mid-rank entrances shrink per ordinal, so the cadence accelerates toward the
- * top. Tap anywhere / Space advances to the next beat immediately; holding
- * ≥600 ms skips straight to the winner. `prefers-reduced-motion` swaps all
- * theatrics for an instant ranked list (and stops the auto-advance clock).
- *
- * Data sources, in priority order:
- *   1. `payload` prop — full ranking handed straight from the controller.
- *   2. Module-level signal — the controller validates a WS `judgement` frame
- *      with `publishJudgement(frame)` (@aux/shared JudgementPayloadSchema);
- *      no prop threading needed until the live wiring lands next phase.
- *   3. `results` prop — server-revealed mirror from room snapshots (works on
- *      the polling fallback too; degraded mode = no pre-final podium).
- *
- * With 1 or 2 available the winner podium renders locally before the final
- * server advance; with only 3 each beat mirrors one server-side reveal and the
- * last tap finalizes. All text renders as inert text; explanations are plain
- * text below their card facts (no HTML sink, TDD §8).
+ * Beats play themselves (entrance + ≤600 ms gap). Tap / Space = next beat;
+ * hold ≥600 ms = jump to the winner. Reduced motion shows a plain ranked list.
  */
-import { createMemo, createSignal, For, Show, onCleanup } from 'solid-js';
-import { JudgementPayloadSchema, type JudgementResult } from '@aux/shared';
-import './reveal.css';
+import { createEffect, createMemo, createSignal, For, Show, onCleanup } from 'solid-js';
+import { startConfettiLifecycle } from './confetti.js';
+import { JudgeBullets } from '../shared-ui/judge-bullets.js';
 
 export interface RevealEntry {
   rank: number;
@@ -36,55 +18,31 @@ export interface RevealEntry {
   title: string;
   artist: string;
   explanation: string;
+  judgeModel?: string;
   nickname: string;
   chicken?: boolean;
+  reasons?: string[];
+  defenseNote?: string;
+  verdict?: string;
+  defense?: string;
 }
 
 export interface RevealProps {
-  /** Entries known so far (server-revealed mirror from the room snapshot). */
+  /** Entries revealed so far (server mirror from the room snapshot). */
   results: readonly RevealEntry[];
   /** Announced result count for this round (snapshot.resultCount), when known. */
   totalCount?: number | undefined;
   busy: boolean;
-  /** Full ranking off the WS `judgement` frame — enables the pre-final podium. */
-  payload?: readonly JudgementResult[] | undefined;
   onAdvance: (final: boolean) => void;
 }
 
-/** Long-press duration for skip-to-winner. */
 const LONG_PRESS_MS = 600;
-
-/**
- * Max dead-air between beats (owner condition #10): the next beat fires as
- * soon as the current entrance finishes plus this much, so pacing stays tight
- * while the entrance itself carries the drama.
- */
 const BEAT_GAP_MS = 600;
+const REVEAL_CONFETTI_MS = 2_400;
 
-/** Entrance duration per ordinal (mirrored into CSS via --beat-dur): mid ranks accelerate. */
+/** Entrance duration per ordinal: mid ranks accelerate, the winner lands slow and heavy. */
 const entranceMs = (ordinal: number, total: number): number =>
-  ordinal >= total ? 380 : Math.max(240, 520 - ordinal * 45);
-
-// ── Module-level judgement signal (WS `judgement` frames land here) ──────────
-
-const [published, setPublished] = createSignal<readonly JudgementResult[]>([]);
-
-/**
- * Feed a raw WS `judgement` frame payload ({results:[…]}) through the shared
- * schema; valid rankings are published to every mounted Reveal instantly,
- * invalid frames are dropped. Returns whether the frame was accepted.
- */
-export const publishJudgement = (raw: unknown): boolean => {
-  const parsed = JudgementPayloadSchema.safeParse(raw);
-  if (!parsed.success) return false;
-  setPublished(parsed.data.results);
-  return true;
-};
-
-/** Drop the published ranking (e.g. when the round rolls over). */
-export const clearJudgement = (): void => {
-  setPublished([]);
-};
+  ordinal >= total ? 520 : Math.max(240, 520 - ordinal * 45);
 
 // ── Tiny WebAudio synth (no assets, gesture-gated by the host's taps) ────────
 
@@ -124,10 +82,8 @@ function createSfx(enabled: () => boolean) {
     osc.stop(t0 + dur + 0.05);
   };
   return {
-    /** Drumroll tick; pitch climbs +2 semitones per rank (spec §5). */
     tick(step: number) {
-      const freq = 220 * 2 ** (step / 6); // ~+2 semitones per rank
-      tone(0, freq, 0.09, 'square', 0.05);
+      tone(0, 220 * 2 ** (step / 6), 0.09, 'square', 0.05);
     },
     slam() {
       tone(0, 160, 0.4, 'sawtooth', 0.14, 55);
@@ -141,57 +97,52 @@ function createSfx(enabled: () => boolean) {
   };
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
-
 export const Reveal = (props: RevealProps) => {
   const [beat, setBeat] = createSignal(0); // 0 = drumroll · 1..total = revealed ordinals
   const [flash, setFlash] = createSignal(false);
-  const [reduced, setReduced] = createSignal(
-    typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches,
-  );
-  let root: HTMLElement | undefined;
-  const timers: ReturnType<typeof setTimeout>[] = [];
-  const later = (fn: () => void, ms: number) => timers.push(setTimeout(fn, ms));
-  onCleanup(() => timers.forEach(clearTimeout));
-  onCleanup(() => window.removeEventListener('keydown', onKey));
-
+  const [showConfetti, setShowConfetti] = createSignal(false);
   const motionQuery =
     typeof window.matchMedia === 'function'
       ? window.matchMedia('(prefers-reduced-motion: reduce)')
       : null;
+  const [reduced, setReduced] = createSignal(motionQuery?.matches ?? false);
   const onMotionChange = () => setReduced(motionQuery?.matches ?? false);
   motionQuery?.addEventListener?.('change', onMotionChange);
   onCleanup(() => motionQuery?.removeEventListener?.('change', onMotionChange));
 
+  let root: HTMLElement | undefined;
+  const timers: ReturnType<typeof setTimeout>[] = [];
+  const later = (fn: () => void, ms: number) => timers.push(setTimeout(fn, ms));
+  onCleanup(() => timers.forEach(clearTimeout));
+
   const sfx = createSfx(() => !reduced());
 
-  // Worst→best order; prop payload > module signal > snapshot mirror.
-  const ordered = createMemo<readonly RevealEntry[]>(() => {
-    const src = props.payload ?? (published().length > 0 ? published() : props.results);
-    return [...src].sort((a, b) => b.rank - a.rank);
-  });
+  const ordered = createMemo<readonly RevealEntry[]>(() =>
+    [...props.results].sort((a, b) => b.rank - a.rank),
+  );
   const total = () => Math.max(props.totalCount ?? 0, ordered().length);
-  /** True when we hold the full ranking locally and can podium before the final advance. */
-  const hasFullSource = () => props.payload !== undefined || published().length > 0;
-  const hasFull = () => hasFullSource() && total() > 0 && ordered().length >= total();
-
   const finished = () => total() > 0 && beat() >= total();
   const current = () => ordered()[beat() - 1];
-  /** Can ordinal n be shown yet? (snapshot mirror may lag the cadence briefly) */
   const canShow = (n: number) => n <= ordered().length;
-  /** Freeze zone: everything from "two names left" up to (not incl.) the podium. */
   const freezeZone = () => !finished() && beat() >= total() - 2 && beat() > 0;
   const ghosts = () => Math.max(0, total() - beat());
+  const winnerRevealed = () => finished() && canShow(total());
 
-  const ordinalClass = (ordinal: number) =>
-    finished() || ordinal >= total()
-      ? 'rv-tier-winner'
-      : ordinal <= 1
-        ? 'rv-tier-slam'
-        : ordinal > total() - 2
-          ? 'rv-tier-top'
-          : 'rv-tier-mid';
+  let stopRevealConfetti: (() => void) | undefined;
+  createEffect(() => {
+    stopRevealConfetti?.();
+    stopRevealConfetti = undefined;
+    if (!winnerRevealed() || reduced() || current()?.judgeModel === 'crowd-no-votes') {
+      setShowConfetti(false);
+      return;
+    }
+    setShowConfetti(true);
+    stopRevealConfetti = startConfettiLifecycle(() => setShowConfetti(false), REVEAL_CONFETTI_MS);
+  });
+  onCleanup(() => stopRevealConfetti?.());
+
+  const tier = (ordinal: number) =>
+    ordinal >= total() ? 'winner' : ordinal <= 1 ? 'slam' : ordinal > total() - 2 ? 'top' : 'mid';
 
   const flashFx = () => {
     if (reduced()) return;
@@ -201,7 +152,7 @@ export const Reveal = (props: RevealProps) => {
   const shakeFx = () => {
     if (!root || reduced()) return;
     root.classList.remove('do-shake');
-    void root.offsetWidth; // restart the CSS animation
+    void root.offsetWidth;
     root.classList.add('do-shake');
     later(() => root?.classList.remove('do-shake'), 500);
   };
@@ -215,24 +166,23 @@ export const Reveal = (props: RevealProps) => {
   };
   onCleanup(clearAuto);
 
-  /** Enter the given ordinal with its drama + SFX (no scheduling side effects). */
   const enterBeat = (ordinal: number) => {
     setBeat(ordinal);
+    if (ordered().some((entry) => entry.judgeModel === 'crowd-no-votes')) return;
     if (ordinal < total()) {
       if (ordinal === 1) {
         sfx.slam();
-        shakeFx(); // last place hits the stage
+        shakeFx();
       } else {
         sfx.tick(ordinal);
-        if (ordinal === total() - 1) sfx.riser(); // top-2 incoming
+        if (ordinal === total() - 1) sfx.riser();
       }
     } else {
-      flashFx(); // winner white-flash
+      flashFx();
       sfx.fanfare();
     }
   };
 
-  /** Queue the next beat: entrance duration + BEAT_GAP_MS of dead air, max. */
   const scheduleNext = (ms?: number) => {
     clearAuto();
     if (reduced() || total() === 0 || finished()) return;
@@ -240,9 +190,8 @@ export const Reveal = (props: RevealProps) => {
     const delay = ms ?? entranceMs(next, total()) + BEAT_GAP_MS;
     autoTimer = setTimeout(() => {
       autoTimer = undefined;
-      // Host request in flight or server mirror lagging: poll briefly instead
-      // of dropping a beat (network waits aren't theatrical delays).
-      if (props.busy || !canShow(beat() + 1)) {
+      // A host request in flight or a lagging mirror: poll briefly, never drop a beat.
+      if (props.busy || !canShow(beat())) {
         scheduleNext(260);
         return;
       }
@@ -250,49 +199,43 @@ export const Reveal = (props: RevealProps) => {
     }, delay);
   };
 
-  /** Play ordinal n, sync the server reveal, then keep the cadence going. */
+  /** Play ordinal n and ask the server to reveal it (players sync). */
   const fire = (n: number) => {
     enterBeat(n);
-    if (n < total()) {
-      props.onAdvance(false); // reveal the next result server-side (players sync)
-      scheduleNext();
-    } else if (!hasFull()) {
-      // Degraded (snapshot-only): finalize now; the server's final advance
-      // carries everyone to LEADERBOARD. With full data the podium shows from
-      // the payload and "Continue" sends the final instead.
-      props.onAdvance(true);
-    }
+    props.onAdvance(false);
+    if (n < total()) scheduleNext();
   };
 
-  /** Tap/Space: advance immediately, cancelling any queued beat.
-   *  Allowed under reduced motion too (no timers there; beats are silent no-ops
-   *  that just move the invisible cursor so Continue/finalize stays reachable). */
   const advance = () => {
     if (props.busy || total() === 0 || finished()) return;
     clearAuto();
     fire(beat() + 1);
   };
 
+  /** Continue closes the round on the server → LEADERBOARD. */
   const continueToLeaderboard = () => {
     if (props.busy) return;
-    props.onAdvance(true); // server closes out remaining reveals → LEADERBOARD
+    props.onAdvance(true);
+  };
+
+  /** Reveal everything at once (reduced motion / long press). */
+  const revealAll = () => {
+    clearAuto();
+    const remaining = total() - beat();
+    setBeat(total());
+    for (let i = 0; i < remaining; i += 1) props.onAdvance(false);
   };
 
   // ── Input: tap / space / long-press skip ───────────────────────────────────
 
   let pressTimer: ReturnType<typeof setTimeout> | undefined;
   let longFired = false;
-
   const skipToWinner = () => {
     if (props.busy || total() === 0 || finished()) return;
-    clearAuto();
     longFired = true;
-    setBeat(total());
+    revealAll();
     flashFx();
-    if (!hasFull()) props.onAdvance(true); // trust the final advance to close out the round
-    // hasFull(): podium renders from the payload; Continue finalizes server-side.
   };
-
   const onPointerDown = () => {
     longFired = false;
     clearTimeout(pressTimer);
@@ -302,33 +245,30 @@ export const Reveal = (props: RevealProps) => {
   const onTap = () => {
     if (!longFired) advance();
   };
-
   const onKey = (ev: KeyboardEvent) => {
     if (ev.key !== ' ' && ev.key !== 'Enter') return;
     const target = ev.target as HTMLElement | null;
-    if (target?.tagName === 'BUTTON') return; // let focused buttons handle themselves
+    if (target?.tagName === 'BUTTON') return;
     ev.preventDefault();
     advance();
   };
   window.addEventListener('keydown', onKey);
+  onCleanup(() => window.removeEventListener('keydown', onKey));
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
   const bestFirst = () => [...ordered()].sort((a, b) => a.rank - b.rank);
-  const progress = () => `${Math.min(beat(), total())}/${total()}`;
-  const beatDurVar = (ordinal: number) => ({
-    '--beat-dur': `${entranceMs(ordinal, total())}ms`,
-  });
+  const beatDurVar = (ordinal: number) => ({ '--beat-dur': `${entranceMs(ordinal, total())}ms` });
+  const stop = (fn: () => void) => (e: Event) => {
+    e.stopPropagation();
+    fn();
+  };
 
   return (
     <section
       ref={root}
       class="rv"
-      classList={{
-        'rv-freeze': freezeZone(),
-        'rv-podium': finished(),
-        'rv-reduced': reduced(),
-      }}
+      classList={{ 'rv-freeze': freezeZone(), 'rv-podium': finished(), 'rv-reduced': reduced() }}
       data-beat={beat()}
       onPointerDown={onPointerDown}
       onPointerUp={cancelPress}
@@ -339,21 +279,19 @@ export const Reveal = (props: RevealProps) => {
       <Show when={flash()}>
         <div class="rv-flash" aria-hidden="true" />
       </Show>
-
-      {/* Winner podium: crown + three CSS-only confetti bursts. */}
-      <Show when={finished() && !reduced()}>
+      <Show when={showConfetti()}>
         <div class="rv-confetti" aria-hidden="true">
           <For each={[0, 1, 2]}>
             {(burst) => (
-              <div class={`rv-burst rv-burst-${burst}`}>
+              <div class="rv-burst">
                 <For each={Array.from({ length: 14 }, (_, i) => i)}>
                   {(i) => (
                     <span
                       style={{
                         '--cx': `${(i - 6.5) * 9 + ((burst * 37) % 23)}vw`,
-                        '--cd': `${(i * 53 + burst * 97) % 400}ms`,
+                        '--cd': `${((i * 53 + burst * 97) % 400) + burst * 500}ms`,
                         '--cr': `${(i * 137 + burst * 61) % 360}deg`,
-                        '--cc': ['#ff2fb4', '#7c3aed', '#ffda57', '#41e6c0', '#ff7a45'][i % 5],
+                        '--cc': ['#304bc7', '#d95734', '#ead5e3', '#f1c7af'][i % 4],
                       }}
                     />
                   )}
@@ -364,43 +302,58 @@ export const Reveal = (props: RevealProps) => {
         </div>
       </Show>
 
-      <p class="round-heading">the verdict</p>
-      <p class="rv-progress">
-        {progress()} revealed · beats play themselves · tap/space = next · hold = skip to winner
+      <p class="kicker rv-progress">
+        The reveal · {Math.min(beat(), total())}/{total()}
+        <Show when={!reduced() && !finished()}> · tap for next, hold to skip</Show>
       </p>
 
       <Show
         when={!reduced()}
         fallback={
-          /* Reduced-motion fallback: instant ranked list, same Continue control. */
           <div class="rv-list">
+            <Show when={ordered().length < total()}>
+              <button
+                type="button"
+                class="btn btn--primary btn--block"
+                disabled={props.busy || total() === 0}
+                onClick={stop(revealAll)}
+              >
+                Show all results
+              </button>
+            </Show>
             <For each={bestFirst()}>
               {(entry) => (
                 <article class="rv-row" data-rank={entry.rank}>
-                  <span class="rv-row-rank">#{entry.rank}</span>
-                  <span class="rv-row-who">
-                    {entry.chicken ? '🐔 ' : ''}
-                    {entry.nickname}
-                  </span>
-                  <span class="rv-row-what">
-                    “{entry.title}” — {entry.artist}
-                  </span>
-                  <strong class="rv-row-score">{entry.score}/100</strong>
-                  <p class="rv-row-why">{entry.explanation}</p>
+                  <span class="rv-row-rank">{entry.rank}</span>
+                  <div class="rv-row-body">
+                    <p class="rv-row-what">
+                      <b>{entry.title}</b> · {entry.artist}
+                    </p>
+                    <p class="rv-row-who">
+                      {entry.chicken ? 'Chicken · ' : ''}
+                      {entry.nickname}
+                    </p>
+                    <JudgeBullets judgement={entry} />
+                  </div>
+                  <strong class="rv-row-score mono">
+                    <Show when={entry.judgeModel !== 'crowd-no-votes'} fallback="No votes">
+                      {entry.score}
+                      <small>
+                        {entry.judgeModel === 'crowd-vote-v1' ? '% vote share' : '/100'}
+                      </small>
+                    </Show>
+                  </strong>
                 </article>
               )}
             </For>
-            <Show when={total() > 0}>
+            <Show when={ordered().length >= total() && total() > 0}>
               <button
                 type="button"
-                class="btn-primary btn-start"
+                class="btn btn--primary btn--block"
                 disabled={props.busy}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  continueToLeaderboard();
-                }}
+                onClick={stop(continueToLeaderboard)}
               >
-                {props.busy ? 'Closing…' : 'Continue ▶'}
+                {props.busy ? 'Closing…' : 'Continue'}
               </button>
             </Show>
           </div>
@@ -410,19 +363,19 @@ export const Reveal = (props: RevealProps) => {
           when={beat() > 0}
           fallback={
             <div class="rv-drumroll" role="status">
-              <div class="rv-drum-ring" aria-hidden="true" />
-              <p class="scenario-big">who nailed it?</p>
-              <p class="hint">worst to best, played automatically — brace for last place 💀</p>
+              <div class="rv-drum" aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </div>
+              <h2 class="display rv-drum-title">Who nailed it?</h2>
               <button
                 type="button"
-                class="btn-primary btn-start"
+                class="btn btn--primary btn--big"
                 disabled={props.busy || total() === 0}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  advance();
-                }}
+                onClick={stop(advance)}
               >
-                Start the countdown ▶
+                Start the reveal
               </button>
             </div>
           }
@@ -430,8 +383,6 @@ export const Reveal = (props: RevealProps) => {
           <Show when={current()} fallback={<div class="rv-card rv-pending">…</div>}>
             {(entry) => (
               <>
-                {/* Freeze zone: blurred ghosts of the remaining top spots pulse
-                    (heartbeat) until their beats come due. */}
                 <Show when={freezeZone()}>
                   <div class="rv-ghosts" aria-hidden="true">
                     <For each={Array.from({ length: ghosts() }, (_, i) => i)}>
@@ -441,37 +392,55 @@ export const Reveal = (props: RevealProps) => {
                 </Show>
 
                 <article
-                  class={`rv-card ${ordinalClass(beat())}`}
+                  class="rv-card"
+                  data-tier={entry().judgeModel === 'crowd-no-votes' ? 'mid' : tier(beat())}
                   data-rank={entry().rank}
                   style={beatDurVar(beat())}
                 >
-                  <p class="rv-rank">{beat() === total() ? '🏆' : `#${entry().rank}`}</p>
-                  <h3 class="rv-title">“{entry().title}”</h3>
+                  <span class="stamp rv-rank" classList={{ 'stamp--lime': beat() === total() }}>
+                    {entry().judgeModel === 'crowd-no-votes'
+                      ? 'No winner'
+                      : entry().rank === 1
+                        ? ordered().filter((row) => row.rank === 1).length > 1
+                          ? 'Joint winner'
+                          : 'Winner'
+                        : `#${entry().rank}`}
+                  </span>
+                  <h3 class="display rv-title">{entry().title}</h3>
                   <p class="rv-artist">{entry().artist}</p>
-                  <strong class="rv-score">{entry().score}/100</strong>
-                  <Show when={beat() === total()}>
-                    <p class="rv-crown" aria-hidden="true">
-                      👑
-                    </p>
-                  </Show>
                   <p class="rv-owner">
-                    played by {entry().chicken ? '🐔 ' : ''}
-                    <strong>{entry().nickname}</strong>
+                    <span class="kicker">played by</span>
+                    <strong>
+                      {entry().chicken ? 'Chicken · ' : ''}
+                      {entry().nickname}
+                    </strong>
                   </p>
-                  <p class="rv-explanation">{entry().explanation}</p>
+                  <strong class="rv-score mono">
+                    <Show when={entry().judgeModel !== 'crowd-no-votes'} fallback="No votes">
+                      {entry().score}
+                      <small>
+                        {entry().judgeModel === 'crowd-vote-v1' ? '% vote share' : '/100'}
+                      </small>
+                    </Show>
+                  </strong>
+                  <Show when={entry().defense}>
+                    {(defense) => (
+                      <p class="rv-defense">
+                        <span class="kicker">their defense</span>“{defense()}”
+                      </p>
+                    )}
+                  </Show>
+                  <JudgeBullets judgement={entry()} />
                 </article>
 
-                <Show when={finished() && hasFull()}>
+                <Show when={winnerRevealed()}>
                   <button
                     type="button"
-                    class="btn-primary btn-start"
+                    class="btn btn--primary btn--big"
                     disabled={props.busy}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      continueToLeaderboard();
-                    }}
+                    onClick={stop(continueToLeaderboard)}
                   >
-                    {props.busy ? 'Closing…' : 'Continue ▶'}
+                    {props.busy ? 'Closing…' : 'Continue'}
                   </button>
                 </Show>
               </>

@@ -1,184 +1,199 @@
 /**
- * JudgeService core (TDD §8 / D-012): ONE batched LLM call per round,
- * schema-validated, with a deterministic fallback so an LLM outage never
- * stalls a party. Depends only on the LLMProvider seam — game logic never
- * imports a vendor SDK.
- *
- * Semantics:
- *  - 3 attempts with exponential backoff; each response must cover every
- *    songIndex exactly once or the attempt is discarded.
- *  - Scores are clamped to 0..100 (defense in depth on top of Zod).
- *  - Ranks are DERIVED server-side by score sort (stable tiebreak: lower
- *    songIndex wins) — the model never gets to declare ranks.
- *  - After all attempts fail → hash-seeded deterministic judge tagged
- *    `judge_model='fallback-hash'`.
+ * Judge service (TDD §8 / D-012): bounded, validated LLM calls per track over
+ * the LLMProvider seam. A failure rejects; the orchestrator then switches the
+ * whole round to crowd voting instead of mixing in invented scores.
  */
-import { createHash } from 'node:crypto';
-import type { LLMProvider, LlmCompleteRequest } from './llm-provider.js';
-import { buildJudgeMessages, type JudgeSong } from './prompt.js';
-import { JUDGE_JSON_SCHEMA, parseJudgeResponse } from './schema.js';
+import type { JudgeConfidence, JudgingCategories, TrackJudgement } from '@aux/shared';
+import { LlmProviderError, type LLMProvider, type LlmRequestContext } from './llm-provider.js';
+import { buildTrackJudgeMessages, type JudgeSong } from './prompt.js';
+import {
+  JudgeParseError,
+  parseTrackJudgementResponse,
+  TRACK_JUDGEMENT_JSON_SCHEMA,
+  type SongKnowledge,
+} from './schema.js';
 
 export interface JudgeRoundSong extends JudgeSong {
-  /** Stable id — seeds the deterministic fallback score. */
+  /** Stable track identifier; kept separate from the anonymous prompt. */
   id: string;
 }
 
-export interface JudgeResult {
-  songIndex: number;
-  score: number;
-  rank: number;
-  explanation: string;
-  judgeModel: string;
-}
-
-export interface JudgeRoundOutput {
-  results: JudgeResult[];
-  model: string;
-}
-
-export interface JudgeRoundInput {
-  scenario: string;
-  songs: readonly JudgeRoundSong[];
-}
-
 export interface JudgeOptions {
-  /** Validation attempts before falling back (default 3). */
+  /** Validation attempts before rejecting (default 2, maximum 3). */
   attempts?: number;
-  /** Per-call provider timeout in ms (default 15_000). */
+  context?: LlmRequestContext;
+  /** The scenario's agreed feeling, judged as the brief (absent for custom prompts). */
+  vibe?: string;
+  signal?: AbortSignal;
+  /** Per-call provider timeout in ms (default 12_000, maximum 15_000). */
   timeoutMs?: number;
   /** Base backoff in ms between attempts (default 250, doubles per attempt). */
   backoffMs?: number;
+  onFailure?: (context: {
+    attempt: number;
+    provider: string;
+    model: string;
+    error: unknown;
+  }) => void;
 }
 
-export const FALLBACK_MODEL = 'fallback-hash';
-
-const FALLBACK_EXPLANATIONS = [
-  'Chaotic, committed, and somehow exactly right for this moment.',
-  'A left-field pick that shouldn\u2019t work — and absolutely does.',
-  'Reads the room like a headline reads the news: perfectly.',
-  'Main-character energy in audio form; the scenario never stood a chance.',
-  'Bold, slightly unhinged, impossible to argue with.',
-  'The kind of song that makes the moment feel scripted.',
-] as const;
-
-function clampScore(value: number): number {
-  return Math.max(0, Math.min(100, Math.round(value)));
+export interface JudgedTrack extends TrackJudgement {
+  judgeModel: string;
+  confidence: JudgeConfidence;
 }
 
-/** Rank results by score desc; stable tiebreak keeps the earlier songIndex ahead. */
-function deriveRanks<T extends { songIndex: number; score: number }>(
-  rows: readonly T[],
-): Map<number, number> {
-  const ordered = [...rows].sort((a, b) => b.score - a.score || a.songIndex - b.songIndex);
-  const ranks = new Map<number, number>();
-  ordered.forEach((row, position) => ranks.set(row.songIndex, position + 1));
-  return ranks;
-}
-
-function fallbackJudge(songs: readonly JudgeRoundSong[]): JudgeResult[] {
-  const scored = songs.map((song) => {
-    // Hash-seeded from the song id alone → same id always scores the same.
-    const digest = createHash('sha256').update(song.id).digest();
-    return {
-      songIndex: song.index,
-      score: clampScore(40 + (digest.readUInt32BE(0) % 55)),
-      explanation: FALLBACK_EXPLANATIONS[digest.readUInt32BE(4) % FALLBACK_EXPLANATIONS.length]!,
-    };
-  });
-  const ranks = deriveRanks(scored);
-  return scored.map(({ songIndex, score, explanation }) => ({
-    songIndex,
-    score,
-    rank: ranks.get(songIndex)!,
-    explanation,
-    judgeModel: FALLBACK_MODEL,
-  }));
-}
-
-function buildRequest(scenario: string, songs: readonly JudgeRoundSong[]): LlmCompleteRequest {
-  return {
-    messages: buildJudgeMessages(scenario, songs),
-    jsonSchema: JUDGE_JSON_SCHEMA,
-    maxTokens: Math.max(400, songs.length * 120),
-    temperature: 0.9,
-  };
-}
-
-function validateCoverage(
-  rows: readonly { songIndex: number }[],
-  songs: readonly JudgeRoundSong[],
-): void {
-  if (rows.length !== songs.length) throw new Error('judge did not cover every song');
-  const seen = new Set<number>();
-  for (const row of rows) {
-    if (seen.has(row.songIndex)) throw new Error(`duplicate judgement for song ${row.songIndex}`);
-    seen.add(row.songIndex);
-  }
-  for (const song of songs) {
-    if (!seen.has(song.index)) throw new Error(`missing judgement for song ${song.index}`);
-  }
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+function withTimeout<T>(
+  start: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  parent?: AbortSignal,
+): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('judge timeout')), timeoutMs);
+    const controller = new AbortController();
+    const signal = parent ? AbortSignal.any([controller.signal, parent]) : controller.signal;
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      reject(
+        parent?.aborted
+          ? new LlmProviderError('cancelled', 'Judge round was cancelled', false)
+          : new LlmProviderError('timeout', 'AI judge deadline exceeded', true),
+      );
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => {
+      controller.abort();
+    }, timeoutMs);
     timer.unref();
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error('judge provider failed'));
-      },
-    );
+    // Catch synchronous adapter failures as well as rejected promises.
+    Promise.resolve()
+      .then(() => {
+        if (signal.aborted)
+          throw new LlmProviderError('cancelled', 'Judge round was cancelled', false);
+        return start(signal);
+      })
+      .then(
+        (value) => {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', onAbort);
+          resolve(value);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', onAbort);
+          reject(error instanceof Error ? error : new Error('judge provider failed'));
+        },
+      );
   });
 }
+
+function bounded(value: number | undefined, fallback: number, min: number, max: number): number {
+  return value === undefined || !Number.isFinite(value)
+    ? fallback
+    : Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+/** Join the bullets into one prose block for players and persisted results. */
+export function composeExplanation(
+  reasons: readonly string[],
+  defenseNote: string,
+  verdict: string,
+): string {
+  return `${reasons.join(' ')} ${defenseNote} Verdict: ${verdict}`.slice(0, 700);
+}
+
+const NEUTRAL = 1;
 
 /**
- * Judge one round: single batched call, validated, retried, fallback-backed.
- * Never throws for provider/validation failures — worst case is the
- * deterministic fallback ranking.
+ * Deterministic uncertainty rules (round-fit-v3). The model cannot hear audio,
+ * so categories it admits it cannot know are pinned to neutral by code, not by
+ * trust in the prompt. A catalog description supplies the sound, never lyrics.
  */
-export async function judgeRound(
-  { scenario, songs }: JudgeRoundInput,
-  llm: LLMProvider | undefined,
-  opts: JudgeOptions = {},
-): Promise<JudgeRoundOutput> {
-  if (songs.length === 0 || llm === undefined) {
-    return { results: fallbackJudge(songs), model: FALLBACK_MODEL };
+export function applyKnowledgeRules(
+  categories: JudgingCategories,
+  knowledge: SongKnowledge,
+  hasDescription: boolean,
+): { categories: JudgingCategories; confidence: JudgeConfidence } {
+  if (knowledge === 'known') return { categories, confidence: 'high' };
+  const pinned = { ...categories, lyrics: NEUTRAL };
+  if (knowledge === 'unknown' && !hasDescription) {
+    return { categories: { ...pinned, mood: NEUTRAL, genre: NEUTRAL }, confidence: 'low' };
   }
-  const attempts = opts.attempts ?? 3;
-  const timeoutMs = opts.timeoutMs ?? 15_000;
-  const backoffMs = opts.backoffMs ?? 250;
+  return { categories: pinned, confidence: 'medium' };
+}
 
+export function sumCategories(categories: JudgingCategories): number {
+  return Math.round(Object.values(categories).reduce((sum, score) => sum + score, 0) * 10) / 10;
+}
+
+/** Judge one anonymous track independently; rejects once attempts are exhausted. */
+export async function judgeTrack(
+  scenario: string,
+  song: JudgeRoundSong,
+  llm: LLMProvider,
+  opts: JudgeOptions = {},
+): Promise<JudgedTrack> {
+  let lastError: unknown;
+  const attempts = bounded(opts.attempts, 2, 1, 3);
+  const timeoutMs = bounded(opts.timeoutMs, 12_000, 1, 15_000);
+  const backoffMs = bounded(opts.backoffMs, 250, 0, 1_000);
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      const response = await withTimeout(llm.complete(buildRequest(scenario, songs)), timeoutMs);
-      const parsed = parseJudgeResponse(response.text);
-      validateCoverage(parsed.judgements, songs);
-      const clamped = parsed.judgements.map((row) => ({
-        songIndex: row.songIndex,
-        score: clampScore(row.score),
-        explanation: row.explanation,
-      }));
-      const ranks = deriveRanks(clamped);
+      const response = await withTimeout(
+        (signal) =>
+          llm.complete({
+            messages: buildTrackJudgeMessages(scenario, song, opts.vibe),
+            jsonSchema: TRACK_JUDGEMENT_JSON_SCHEMA,
+            maxTokens: 800,
+            temperature: 0.2,
+            ...(opts.context ? { context: opts.context } : {}),
+            signal,
+          }),
+        timeoutMs,
+        opts.signal,
+      );
+      const parsed = parseTrackJudgementResponse(response.text);
+      const { categories, confidence } = applyKnowledgeRules(
+        parsed.categories,
+        parsed.knowledge,
+        Boolean(song.description?.trim()),
+      );
+      const reasons = parsed.reasons;
+      const defenseNote = parsed.defense;
+      const verdict = parsed.verdict;
       return {
-        results: clamped.map(({ songIndex, score, explanation }) => ({
-          songIndex,
-          score,
-          rank: ranks.get(songIndex)!,
-          explanation,
-          judgeModel: response.model,
-        })),
-        model: response.model,
+        totalScore: sumCategories(categories),
+        categories,
+        confidence,
+        reasons,
+        defenseNote,
+        verdict,
+        explanation: composeExplanation(reasons, defenseNote, verdict),
+        judgeModel: response.model,
       };
-    } catch {
-      if (attempt + 1 < attempts) {
-        await new Promise((resolve) => setTimeout(resolve, backoffMs * 2 ** attempt));
+    } catch (error) {
+      lastError = error;
+      try {
+        if (error instanceof JudgeParseError) llm.reportInvalidResponse?.();
+        opts.onFailure?.({
+          attempt: attempt + 1,
+          provider: llm.providerName ?? llm.constructor.name ?? 'configured-provider',
+          model: llm.modelName ?? 'configured-model',
+          error,
+        });
+      } catch {
+        // Observability failures must never strand a game.
+      }
+      if (error instanceof LlmProviderError && !error.retryable) break;
+      const delay = Math.max(
+        backoffMs * 2 ** attempt,
+        error instanceof LlmProviderError ? (error.retryAfterMs ?? 0) : 0,
+      );
+      // Do not retry earlier than Retry-After, or keep a party waiting for a long cooldown.
+      if (delay > 2_000) break;
+      if (attempt + 1 < attempts && delay > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
   }
-  return { results: fallbackJudge(songs), model: FALLBACK_MODEL };
+  throw lastError ?? new LlmProviderError('unavailable', 'AI judge is unavailable', false);
 }

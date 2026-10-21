@@ -1,10 +1,12 @@
+import { requestWithDeadline } from '../config/request.js';
 /**
  * Player-side API access (TDD §5 envelope contract).
  * Every REST response is `{ ok: true, data }` or `{ ok: false, error: { code, message } }`
  * with codes from @aux/shared — part of the wire contract, matched precisely here.
  */
-import { LobbyStateSchema, TrackSchema } from '@aux/shared';
+import { LobbyStateSchema, TrackSchema, DEFENSE_MAX } from '@aux/shared';
 import type { Track } from '@aux/shared';
+import { apiUrl } from '../config/endpoints.js';
 import type { PlayerSession } from './session.js';
 
 /** Personality-first, short — errors.ts copy lives client-side too (TDD §9). */
@@ -30,13 +32,17 @@ function readEnvelope(res: Response): Promise<WireEnvelope | null> {
     .catch(() => null);
 }
 
-export async function joinRoom(code: string, nickname: string): Promise<JoinResult> {
+export async function joinRoom(
+  code: string,
+  nickname: string,
+  aiConsent = false,
+): Promise<JoinResult> {
   let res: Response;
   try {
-    res = await fetch(`/api/v1/rooms/${encodeURIComponent(code)}/join`, {
+    res = await requestWithDeadline(apiUrl(`/api/v1/rooms/${encodeURIComponent(code)}/join`), {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify({ code, nickname }),
+      body: JSON.stringify({ code, nickname, ...(aiConsent ? { aiConsent: true } : {}) }),
     });
   } catch {
     return {
@@ -89,11 +95,34 @@ export async function joinRoom(code: string, nickname: string): Promise<JoinResu
   return { ok: true, session: { playerId, playerToken, nickname, code } };
 }
 
+/** Read the room's mode before asking for consent. Unknown modes never imply consent. */
+export async function fetchRoomJudgeMode(
+  code: string,
+  signal?: AbortSignal,
+): Promise<'ai' | 'crowd' | null> {
+  try {
+    const res = await requestWithDeadline(
+      apiUrl(`/api/v1/rooms/${encodeURIComponent(code)}/snapshot`),
+      {
+        headers: { accept: 'application/json' },
+        ...(signal ? { signal } : {}),
+      },
+    );
+    if (!res.ok) return null;
+    const env = await readEnvelope(res);
+    const data = env?.ok === true ? env.data : null;
+    if (!data || typeof data !== 'object' || !('judgingMode' in data)) return null;
+    return data.judgingMode === 'ai' || data.judgingMode === 'crowd' ? data.judgingMode : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Player count from the public snapshot endpoint; null when the room can't be seen. */
 export async function fetchPlayerCount(code: string): Promise<number | null> {
   let res: Response;
   try {
-    res = await fetch(`/api/v1/rooms/${encodeURIComponent(code)}/snapshot`, {
+    res = await requestWithDeadline(apiUrl(`/api/v1/rooms/${encodeURIComponent(code)}/snapshot`), {
       headers: { accept: 'application/json' },
     });
   } catch {
@@ -144,7 +173,30 @@ function coerceTrack(raw: unknown): Track | null {
     typeof r.durationMs === 'number' && Number.isFinite(r.durationMs) && r.durationMs > 0
       ? Math.round(r.durationMs)
       : undefined;
-  const candidate = { id, title, artist, album, durationMs, artUrl };
+  const source =
+    r.source === 'original' ||
+    r.source === 'licensed' ||
+    r.source === 'apple_music' ||
+    r.source === 'deezer' ||
+    r.source === 'youtube' ||
+    r.source === 'manual'
+      ? r.source
+      : undefined;
+  const description = typeof r.description === 'string' ? r.description : undefined;
+  const attribution = typeof r.attribution === 'string' ? r.attribution : undefined;
+  const externalUrl = typeof r.externalUrl === 'string' ? r.externalUrl : undefined;
+  const candidate = {
+    id,
+    title,
+    artist,
+    album,
+    durationMs,
+    artUrl,
+    source,
+    description,
+    attribution,
+    externalUrl,
+  };
   const parsed = TrackSchema.safeParse(candidate);
   return parsed.success ? parsed.data : null;
 }
@@ -157,19 +209,34 @@ function coerceTrack(raw: unknown): Track | null {
 export async function searchTracks(query: string, playerToken?: string): Promise<SearchOutcome> {
   let res: Response;
   try {
-    res = await fetch(`/api/v1/search?q=${encodeURIComponent(query)}&limit=10`, {
-      headers: {
-        accept: 'application/json',
-        ...(playerToken !== undefined ? { authorization: `Bearer ${playerToken}` } : {}),
+    res = await requestWithDeadline(
+      apiUrl(`/api/v1/search?q=${encodeURIComponent(query)}&limit=20`),
+      {
+        headers: {
+          accept: 'application/json',
+          ...(playerToken !== undefined ? { authorization: `Bearer ${playerToken}` } : {}),
+        },
       },
-    });
+    );
   } catch {
     return { status: 'error', message: "couldn't reach search — check your wifi" };
   }
-  if (res.status === 404 || res.status === 501) return { status: 'unavailable' };
-  if (!res.ok) return { status: 'error', message: 'search hiccupped — try again' };
-
+  if (res.status === 404 || res.status === 501 || res.status === 503) {
+    return { status: 'unavailable' };
+  }
   const env = await readEnvelope(res);
+  if (!res.ok) {
+    const message =
+      res.status === 429
+        ? 'Search is busy — try again in a few seconds.'
+        : res.status === 401
+          ? 'Your room session expired — rejoin the room.'
+          : 'Music search is unavailable right now — try again.';
+    return {
+      status: 'error',
+      message,
+    };
+  }
   if (!env || env.ok !== true) {
     return {
       status: 'error',
@@ -187,14 +254,24 @@ export async function searchTracks(query: string, playerToken?: string): Promise
         ? (data as { results: unknown[] }).results
         : [];
   const seen = new Set<string>();
+  const normalized = (value: string) =>
+    value
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/\s*[([](?:remaster(?:ed)?(?:\s+\d{4})?|explicit|clean|radio edit)[)\]]\s*/g, ' ')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
   const tracks: Track[] = [];
   for (const raw of list) {
     const t = coerceTrack(raw);
-    if (t && !seen.has(t.id)) {
+    const identity = t ? `${normalized(t.title)}\0${normalized(t.artist)}` : '';
+    if (t && !seen.has(t.id) && !seen.has(identity)) {
       seen.add(t.id);
+      seen.add(identity);
       tracks.push(t);
     }
-    if (tracks.length >= 10) break; // spec cap
+    if (tracks.length >= 20) break;
   }
   return { status: 'ok', tracks };
 }
@@ -232,12 +309,14 @@ export async function submitTrack(
   session: PlayerSession,
   track: Track,
   roundIdx: number,
+  defense?: string,
 ): Promise<SubmitResult> {
   const clientMsgId = makeClientMsgId();
+  const trimmedDefense = defense?.trim();
   let res: Response;
   try {
-    res = await fetch(
-      `/api/v1/rooms/${encodeURIComponent(session.code)}/rounds/${roundIdx}/submissions`,
+    res = await requestWithDeadline(
+      apiUrl(`/api/v1/rooms/${encodeURIComponent(session.code)}/rounds/${roundIdx}/submissions`),
       {
         method: 'POST',
         headers: {
@@ -248,6 +327,7 @@ export async function submitTrack(
         body: JSON.stringify({
           clientMsgId,
           track,
+          ...(trimmedDefense ? { defense: trimmedDefense.slice(0, DEFENSE_MAX) } : {}),
           // flattened fallbacks for a legacy reader; stripped by zod non-strict:
           trackId: track.id,
           title: track.title,

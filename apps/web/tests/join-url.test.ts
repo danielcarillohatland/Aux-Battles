@@ -5,7 +5,12 @@
  * non-loopback page origin, and the URL builder must never emit loopback.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildJoinUrl, resolveJoinOrigin } from '../src/host/join-url.js';
+import {
+  buildJoinUrl,
+  resolveJoinOrigin,
+  embedSafeHostUrl,
+  isIpAddressHost,
+} from '../src/host/join-url.js';
 
 function stubLocation(origin: string): void {
   vi.stubGlobal('window', {
@@ -61,5 +66,22 @@ describe('buildJoinUrl', () => {
   it('falls back to window.location.origin when no origin given', () => {
     stubLocation('http://192.168.0.122:8787/host.html');
     expect(buildJoinUrl('JABAR')).toBe('http://192.168.0.122:8787/player.html?code=JABAR');
+  });
+});
+
+describe('embed-safe host origin (D-030)', () => {
+  it('flags bare IP origins and points at the same page on localhost', () => {
+    expect(isIpAddressHost('192.168.0.122')).toBe(true);
+    expect(isIpAddressHost('127.0.0.1')).toBe(true);
+    expect(isIpAddressHost('[::1]')).toBe(true);
+    expect(isIpAddressHost('localhost')).toBe(false);
+    expect(isIpAddressHost('daniels-macbook-air.local')).toBe(false);
+    expect(isIpAddressHost('aux-battles.fly.dev')).toBe(false);
+    expect(embedSafeHostUrl({ protocol: 'http:', port: '5173', pathname: '/host.html' })).toBe(
+      'http://localhost:5173/host.html',
+    );
+    expect(embedSafeHostUrl({ protocol: 'https:', port: '', pathname: '/host.html' })).toBe(
+      'https://localhost/host.html',
+    );
   });
 });

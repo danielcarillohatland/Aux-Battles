@@ -10,7 +10,12 @@ import { ServerFrameSchema } from '@aux/shared';
 import WebSocket from 'ws';
 
 // Real server (with orchestrator) on one port…
-const real = await buildServer({ LOG_LEVEL: 'error', AUX_DEV_MODE: '0', AUX_DB_FILE: ':memory:' });
+const real = await buildServer({
+  LOG_LEVEL: 'error',
+  AUX_DEV_MODE: '0',
+  AUX_DB_FILE: ':memory:',
+  AUX_ENABLE_ORIGINALS: '1',
+});
 await real.app.ready();
 await real.app.listen({ port: 0, host: '127.0.0.1' });
 const port = (real.app.server.address() as { port: number }).port;
@@ -54,7 +59,12 @@ const sub = await fetch(`${base}/api/v1/rounds/${room.code}:0/submissions`, {
   },
   body: JSON.stringify({
     clientMsgId: 'cm-schema-0001',
-    track: { id: 't1', title: 'Validate Me', artist: 'The Schemas', durationMs: 30_000 },
+    track: {
+      id: 'original:midnight-pancakes',
+      title: 'Validate Me',
+      artist: 'The Schemas',
+      durationMs: 32_000,
+    },
   }),
 });
 console.log('submission:', sub.status);

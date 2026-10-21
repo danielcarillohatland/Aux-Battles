@@ -1,27 +1,27 @@
 /**
  * RoundOrchestrator integration tests (AUX-006, Phase 3):
  *  - FSM-backed snapshot building (state/roundIdx/phaseEndsAt/submissions/you).
- *  - L0/L4 playback-mode selection per D-E: api ONLY with a live session AND a
- *    device; ONE startPlayback with the full shuffled queue; manual otherwise.
- *  - QUEUE_DONE detection in api mode → AI_JUDGING → fallback-safe judge fires
- *    JUDGEMENT_STORED so RESULTS is reached end-to-end.
+ *  - Approved catalog playback with project-owned and licensed tracks.
+ *  - QUEUE_DONE → fallback-safe judge → RESULTS end-to-end.
  *  - Kick route: host-only, closes the socket via wsHub.kick + roster removal.
  */
 import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 import type { Track } from '@aux/shared';
+import { SnapshotSchema } from '@aux/shared';
 import { Analytics, NullAnalyticsSink } from '../src/core/analytics.js';
 import { RoomManager } from '../src/core/room-manager.js';
 import { SqliteRoomStore } from '../src/core/room-store.js';
 import {
+  chooseExcerptWindow,
   RoundOrchestrator,
   roundIdOf,
-  type LiveSessionProbe,
   type SubmissionStoreView,
 } from '../src/core/round-orchestrator.js';
 import { SubmissionStore, type StoredSubmission } from '../src/core/submissions.js';
 import { RoomFsm } from '../src/fsm/engine.js';
-import type { MusicProvider, StartPlaybackRequest } from '../src/providers/music-provider.js';
+import type { ApprovedMusicCatalog } from '../src/providers/music-provider.js';
+import type { LLMProvider } from '../src/judge/llm-provider.js';
 import { gameRuntimesRoute } from '../src/routes/game-runtimes.js';
 import type { PushFrame, WsHub, WsViewer } from '../src/ws/types.js';
 
@@ -78,42 +78,12 @@ function stubHub() {
   return { hub, frames, kicked };
 }
 
-const liveProbe: LiveSessionProbe = { getAccessToken: () => Promise.resolve('tok') };
-const deadProbe: LiveSessionProbe = { getAccessToken: () => Promise.resolve(null) };
-
-class StubProvider implements MusicProvider {
-  started: StartPlaybackRequest[] = [];
-  device: { id: string; name: string } | null = { id: 'dev1', name: 'Speaker' };
-  state: {
-    isPlaying: boolean;
-    progressMs: number | null;
-    trackId: string | null;
-    deviceId: string | null;
-  } | null = null;
-
-  search() {
-    return Promise.reject(new Error('unused'));
-  }
-  getTrack() {
-    return Promise.reject(new Error('unused'));
-  }
-  authenticateHost() {
-    return Promise.resolve({ ok: true, deviceRequired: true });
-  }
-  async startPlayback(req: StartPlaybackRequest) {
-    this.started.push(req);
-    this.state = { isPlaying: true, progressMs: 0, trackId: null, deviceId: req.deviceId ?? null };
-  }
-  async pause() {}
-  async resume() {}
-  async next() {}
-  getActiveDevice() {
-    return Promise.resolve(this.device);
-  }
-  getPlaybackState() {
-    return Promise.resolve(this.state);
-  }
-}
+const testCatalog: ApprovedMusicCatalog = {
+  search: async () => [],
+  getTrack: async (id) => ({ id, title: `T ${id}`, artist: 'A', source: 'original' }),
+  listTracks: () => [],
+  playableTrack: ({ id }) => ({ id, title: `T ${id}`, artist: 'A', source: 'original' }),
+};
 
 function viewer(playerId: string, role: 'host' | 'player'): WsViewer {
   return { playerId, role, nickname: `nick-${playerId.slice(0, 4)}` };
@@ -121,24 +91,23 @@ function viewer(playerId: string, role: 'host' | 'player'): WsViewer {
 
 /** Build a LOCKED room with orchestrator + fsm wired like game-runtimes does. */
 function lockedRoom(opts: {
-  provider?: StubProvider;
-  probe?: LiveSessionProbe;
+  catalog?: ApprovedMusicCatalog;
   /** Row factory — receives the REAL generated room code. */
   rows?: (code: string) => StoredSubmission[];
-  pollMs?: number;
   submissions?: SubmissionStoreView;
+  excerptDurationMs?: number;
+  llm?: LLMProvider;
 }) {
   const roomManager = new RoomManager();
   const { hub, frames } = stubHub();
   const orch = new RoundOrchestrator({
     roomManager,
     wsHub: hub,
-    ...(opts.pollMs !== undefined ? { pollMs: opts.pollMs } : {}),
     ...(opts.submissions !== undefined ? { submissions: opts.submissions } : {}),
+    ...(opts.excerptDurationMs !== undefined ? { excerptDurationMs: opts.excerptDurationMs } : {}),
+    ...(opts.llm !== undefined ? { llm: opts.llm } : {}),
   });
-  if (opts.provider !== undefined && opts.probe !== undefined) {
-    orch.setPlayback(opts.provider, opts.probe);
-  }
+  orch.setCatalogPlayback(opts.catalog ?? testCatalog);
   const { code } = roomManager.createRoom();
   if (opts.rows !== undefined) {
     orch.setSubmissions(fakeSubmissions(opts.rows(code)));
@@ -163,6 +132,26 @@ async function driveToLocked(fsm: RoomFsm): Promise<void> {
 
 const tick = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+describe('excerpt window selection', () => {
+  it('chooses a deterministic middle section with a safe ending guard', () => {
+    expect(chooseExcerptWindow(180_000)).toEqual({
+      excerptStartMs: 68_400,
+      excerptDurationMs: 30_000,
+    });
+    expect(chooseExcerptWindow(30_000)).toEqual({
+      excerptStartMs: 0,
+      excerptDurationMs: 30_000,
+    });
+  });
+
+  it('handles tracks shorter than the requested excerpt safely', () => {
+    expect(chooseExcerptWindow(9_000)).toEqual({
+      excerptStartMs: 0,
+      excerptDurationMs: 9_000,
+    });
+  });
+});
+
 // ── Snapshots ────────────────────────────────────────────────────────────────
 
 describe('RoundOrchestrator snapshots (AUX-006)', () => {
@@ -176,7 +165,7 @@ describe('RoundOrchestrator snapshots (AUX-006)', () => {
       state: 'LOBBY',
       roundIdx: 0,
       phaseEndsAt: null,
-      playbackMode: 'manual',
+      playbackMode: 'catalog',
       submissionsCount: 0,
       you: { role: 'host', hasSubmitted: false },
     });
@@ -193,151 +182,314 @@ describe('RoundOrchestrator snapshots (AUX-006)', () => {
     const guest = orch.buildSnapshot(code, viewer('p-guest', 'player'));
     expect(host?.state).toBe('PLAYBACK');
     expect(host?.submissionsCount).toBe(2);
+    // A custom pick is the prompt itself (D-029); presets draw from a vibe.
+    expect(host?.scenario).toBe('party');
+    expect(host?.category).toBe('Custom');
+    // Custom prompts are not catalogue scenes, so they leave recent history untouched.
+    expect(orch.serialize(code).recentScenarioIds ?? []).toHaveLength(0);
     expect(host?.you.hasSubmitted).toBe(true);
     expect(guest?.you.role).toBe('player');
     expect(guest?.you.hasSubmitted).toBe(true);
   });
 });
 
-// ── Playback selection (L0/L4) ───────────────────────────────────────────────
+// ── Approved in-app playback ─────────────────────────────────────────────────
 
 describe('playback mode selection (D-E)', () => {
-  it('keeps playback providers and tokens isolated between concurrent rooms', async () => {
-    const roomManager = new RoomManager();
-    const { hub } = stubHub();
-    const rows: StoredSubmission[] = [];
-    const orch = new RoundOrchestrator({
-      roomManager,
-      wsHub: hub,
-      submissions: fakeSubmissions(rows),
-    });
-    const providers = new Map<string, StubProvider>();
-    orch.setPlaybackFactory((code) => {
-      const provider = new StubProvider();
-      provider.device = { id: `device-${code}`, name: `Speaker ${code}` };
-      providers.set(code, provider);
-      return { provider, sessionProbe: liveProbe };
-    });
-
-    const first = roomManager.createRoom().code;
-    const second = roomManager.createRoom().code;
-    rows.push(sub(first, 0, 'a', 'track-a'), sub(second, 0, 'b', 'track-b'));
-    const firstFsm = new RoomFsm({ code: first, onChange: (c) => orch.onTransition(c) });
-    const secondFsm = new RoomFsm({ code: second, onChange: (c) => orch.onTransition(c) });
-    orch.register(first, firstFsm);
-    orch.register(second, secondFsm);
-
-    await driveToLocked(firstFsm);
-    await driveToLocked(secondFsm);
-    await firstFsm.dispatch('BEGIN_PLAYBACK');
-    await secondFsm.dispatch('BEGIN_PLAYBACK');
-    await tick(20);
-
-    expect(providers.get(first)?.started).toEqual([
-      { uris: ['spotify:track:track-a'], deviceId: `device-${first}` },
-    ]);
-    expect(providers.get(second)?.started).toEqual([
-      { uris: ['spotify:track:track-b'], deviceId: `device-${second}` },
-    ]);
-  });
-
-  it('api mode: ONE startPlayback with the full shuffled queue when live + device', async () => {
-    const provider = new StubProvider();
+  it('uses host-browser catalog playback and advances one shuffled card at a time', async () => {
     const { orch, code, fsm, frames } = lockedRoom({
-      provider,
-      probe: liveProbe,
       rows: (c) => [sub(c, 0, 'a', 't1'), sub(c, 0, 'b', 't2'), sub(c, 0, 'c', 't3')],
+      excerptDurationMs: 50,
     });
     await driveToLocked(fsm);
     await fsm.dispatch('BEGIN_PLAYBACK');
     await tick(20);
 
-    expect(provider.started).toHaveLength(1); // §7: ONE call for the whole queue
-    expect(provider.started[0]?.deviceId).toBe('dev1');
-    const uris = provider.started[0]?.uris ?? [];
-    expect(uris).toHaveLength(3);
-    expect([...uris].sort()).toEqual(['spotify:track:t1', 'spotify:track:t2', 'spotify:track:t3']);
+    expect(orch.buildSnapshot(code, viewer('x', 'host'))).toMatchObject({
+      playbackMode: 'catalog',
+      playbackDevice: 'Host browser',
+      playbackStatus: 'ready',
+    });
+
+    expect(await orch.manualNext(code)).toBe('advanced');
+    expect(orch.buildSnapshot(code, viewer('x', 'host'))?.playbackIndex).toBe(1);
     expect(frames.length).toBeGreaterThanOrEqual(2); // transition + mode broadcast
-    expect(orch.buildSnapshot(code, viewer('x', 'host'))?.playbackMode).toBe('api');
   });
 
-  it('manual mode when no live Spotify session exists', async () => {
-    const provider = new StubProvider();
+  it('rejects a duplicate Next while the first advance is in flight', async () => {
     const { orch, code, fsm } = lockedRoom({
-      provider,
-      probe: deadProbe,
+      rows: (c) => [sub(c, 0, 'a', 't1'), sub(c, 0, 'b', 't2')],
+      excerptDurationMs: 100,
+    });
+    await driveToLocked(fsm);
+    await fsm.dispatch('BEGIN_PLAYBACK');
+    await tick(10);
+
+    const first = orch.manualNext(code);
+    const duplicate = orch.manualNext(code);
+    await expect(duplicate).resolves.toBe('invalid');
+    await expect(first).resolves.toBe('advanced');
+  });
+
+  it('falls back safely when an old or tampered id is outside the approved catalog', async () => {
+    const denyingCatalog: ApprovedMusicCatalog = {
+      ...testCatalog,
+      playableTrack: () => null,
+    };
+    const { orch, code, fsm } = lockedRoom({
+      catalog: denyingCatalog,
       rows: (c) => [sub(c, 0, 'a', 't1')],
     });
     await driveToLocked(fsm);
     await fsm.dispatch('BEGIN_PLAYBACK');
     await tick(20);
-    expect(provider.started).toHaveLength(0);
     expect(orch.buildSnapshot(code, viewer('x', 'host'))?.playbackMode).toBe('manual');
+    expect(orch.buildSnapshot(code, viewer('x', 'host'))?.playbackError).toContain(
+      'approved catalog',
+    );
   });
 
-  it('manual mode when no active device (L4 first-class)', async () => {
-    const provider = new StubProvider();
-    provider.device = null;
+  it('supports a mixed original/licensed queue through one catalog mode', async () => {
+    const mixedCatalog: ApprovedMusicCatalog = {
+      ...testCatalog,
+      playableTrack({ id }, roomCode) {
+        return id.startsWith('licensed:')
+          ? {
+              id,
+              title: `Licensed ${id}`,
+              artist: 'Cleared Artist',
+              durationMs: 90_000,
+              source: 'licensed',
+              playbackUrl: `/api/v1/rooms/${roomCode}/licensed-music/${encodeURIComponent(id)}/audio`,
+            }
+          : { id, title: 'Midnight Pancakes', artist: 'AUX House Band', source: 'original' };
+      },
+    };
     const { orch, code, fsm } = lockedRoom({
-      provider,
-      probe: liveProbe,
-      rows: (c) => [sub(c, 0, 'a', 't1')],
+      catalog: mixedCatalog,
+      rows: (c) => [sub(c, 0, 'a', 'original:one'), sub(c, 0, 'b', 'licensed:two')],
     });
+
     await driveToLocked(fsm);
     await fsm.dispatch('BEGIN_PLAYBACK');
     await tick(20);
-    expect(provider.started).toHaveLength(0);
-    expect(orch.buildSnapshot(code, viewer('x', 'host'))?.playbackMode).toBe('manual');
+
+    const snapshot = orch.buildSnapshot(code, viewer('x', 'host'));
+    expect(snapshot?.playbackMode).toBe('catalog');
+    expect(snapshot?.playbackStatus).toBe('ready');
+    expect(snapshot?.playbackDevice).toBe('Host browser');
+    expect(snapshot?.queue?.some((track) => track.source === 'original')).toBe(true);
+    expect(snapshot?.queue?.find((track) => track.source === 'licensed')?.playbackUrl).toMatch(
+      /^\/api\/v1\//,
+    );
   });
 });
 
 // ── Queue done → judge → RESULTS ─────────────────────────────────────────────
 
-describe('QUEUE_DONE → AI_JUDGING → JUDGEMENT_STORED', () => {
-  it('poll detects playback past the last queue track and reaches RESULTS', async () => {
-    const provider = new StubProvider();
+describe('QUEUE_DONE → sequential AI_JUDGING → JUDGEMENT_STORED', () => {
+  it('judges and reveals each song before final ranking', async () => {
     const { orch, code, fsm } = lockedRoom({
-      provider,
-      probe: liveProbe,
       rows: (c) => [sub(c, 0, 'a', 't1'), sub(c, 0, 'b', 't2')],
-      pollMs: 10,
+      excerptDurationMs: 5,
+      llm: {
+        complete: async () => ({
+          model: 'round-model',
+          text: JSON.stringify({
+            knowledge: 'known',
+            totalScore: 7,
+            categories: { scenarioFit: 2, mood: 2, lyrics: 1, genre: 1, wildcard: 1 },
+            reasons: ['The scene fits.', 'The mood fits.'],
+            defense: 'No defense filed.',
+            verdict: 'A solid pick.',
+          }),
+        }),
+      },
     });
     await driveToLocked(fsm);
     await fsm.dispatch('BEGIN_PLAYBACK');
-    await tick(40);
-    expect(fsm.state).toBe('PLAYBACK');
-
-    // Last queued track playing → then something outside the queue → done.
-    provider.state = { isPlaying: true, progressMs: 29_000, trackId: 't2', deviceId: 'dev1' };
-    await tick(60);
-    provider.state = {
-      isPlaying: true,
-      progressMs: 1_000,
-      trackId: 'unrelated-track',
-      deviceId: 'dev1',
+    await tick(20);
+    // Judging runs in the background during Listening (D-027): both verdicts
+    // are checkpointed before the host ever reaches the Judge stage.
+    const listening = orch.serialize(code) as { judgingResults?: Array<{ index: number }> };
+    expect(listening.judgingResults?.map((row) => row.index).sort()).toEqual([0, 1]);
+    await fsm.dispatch('QUEUE_DONE');
+    await tick(20);
+    expect(fsm.state).toBe('AI_JUDGING');
+    let snapshot = orch.buildSnapshot(code, viewer('a', 'host'));
+    expect(snapshot?.judgingStatus).toBe('revealed');
+    expect(snapshot?.judgingIndex).toBe(0);
+    expect(snapshot?.judgingResult?.categories.scenarioFit).toBeGreaterThanOrEqual(0);
+    // Provenance survives schema parsing so clients can disclose degraded scoring.
+    expect(SnapshotSchema.parse(snapshot).judgingResult?.judgeModel).toBe('round-model');
+    // Every track is judged up front (D-027); only index 0 is revealed so far.
+    const checkpoint = orch.serialize(code) as {
+      judgingIndex?: number;
+      judgingStatus?: string;
+      judgingResults?: Array<{ index: number }>;
     };
-    await tick(200);
-    expect(fsm.state).toBe('RESULTS'); // QUEUE_DONE fired; judge stored immediately
+    expect(checkpoint).toMatchObject({ judgingIndex: 0, judgingStatus: 'revealed' });
+    expect(checkpoint.judgingResults?.map((row) => row.index).sort()).toEqual([0, 1]);
+
+    expect(await orch.nextJudgement(code)).toBe('advanced');
+    expect(fsm.state).toBe('AI_JUDGING');
+    await tick(20);
+    snapshot = orch.buildSnapshot(code, viewer('a', 'host'));
+    expect(snapshot?.judgingIndex).toBe(1);
+    expect(snapshot?.judgingStatus).toBe('revealed');
+
+    expect(await orch.nextJudgement(code)).toBe('done');
+    expect(fsm.state).toBe('RESULTS');
 
     const hostSnap = orch.buildSnapshot(code, viewer('a', 'host'));
     expect(hostSnap?.you.hasSubmitted).toBe(true);
   });
 
-  it('device-loss grace falls back to manual instead of hanging the round', async () => {
-    const provider = new StubProvider();
+  it('adds Midnight Pancakes and its sonic profile to judge review', async () => {
+    const prompts: string[] = [];
+    const llm: LLMProvider = {
+      async complete(request) {
+        prompts.push(request.messages.map((message) => message.content).join('\n'));
+        return {
+          model: 'profile-aware-judge',
+          text: JSON.stringify({
+            knowledge: 'known',
+            totalScore: 8,
+            categories: {
+              scenarioFit: 3,
+              mood: 2,
+              lyrics: 1.5,
+              genre: 0.75,
+              wildcard: 0.75,
+            },
+            reasons: [
+              'The playful funk profile gives this strange moment exactly the right bounce.',
+              'A rubbery bassline is the correct response to pancakes at midnight.',
+            ],
+            defense: 'No defense filed.',
+            verdict: 'Breakfast after dark, served correctly.',
+          }),
+        };
+      },
+    };
+    const midnight: Track = {
+      id: 'original:midnight-pancakes',
+      title: 'Midnight Pancakes',
+      artist: 'AUX House Band',
+      source: 'original',
+      description: 'Playful funk-pop with a rubbery bassline and late-night mischief.',
+    };
+    const catalog: ApprovedMusicCatalog = {
+      ...testCatalog,
+      getTrack: async () => midnight,
+      playableTrack: () => midnight,
+    };
     const { orch, code, fsm } = lockedRoom({
-      provider,
-      probe: liveProbe,
-      rows: (c) => [sub(c, 0, 'a', 't1')],
-      pollMs: 10,
+      catalog,
+      rows: (c) => [{ ...sub(c, 0, 'a', midnight.id), track: midnight }],
+      excerptDurationMs: 5,
+      llm,
     });
     await driveToLocked(fsm);
     await fsm.dispatch('BEGIN_PLAYBACK');
     await tick(20);
-    provider.state = null; // three dead polls ⇒ manual fallback
-    await tick(120);
-    expect(fsm.state).toBe('PLAYBACK'); // NOT force-advanced by device loss
-    expect(orch.buildSnapshot(code, viewer('x', 'host'))?.playbackMode).toBe('manual');
+    await fsm.dispatch('QUEUE_DONE');
+    await tick(20);
+    const snapshot = orch.buildSnapshot(code, viewer('x', 'host'));
+    expect(fsm.state).toBe('AI_JUDGING');
+    expect(snapshot?.judgingStatus).toBe('revealed');
+    expect(snapshot?.judgingTrack?.title).toBe('Midnight Pancakes');
+    expect(prompts.join('\n')).toContain('Playful funk-pop');
+  });
+
+  it('shares the place for equal rubric totals instead of a hidden track-id tiebreak', async () => {
+    const llm: LLMProvider = {
+      async complete() {
+        return {
+          model: 'tie-model',
+          text: JSON.stringify({
+            knowledge: 'known',
+            totalScore: 5,
+            categories: {
+              scenarioFit: 2,
+              mood: 1,
+              lyrics: 1,
+              genre: 0.5,
+              wildcard: 0.5,
+            },
+            reasons: ['Equal fit under the same rubric.', 'Same sound, same scene.'],
+            defense: 'No defense filed.',
+            verdict: 'A tie.',
+          }),
+        };
+      },
+    };
+    const { orch, code, fsm } = lockedRoom({
+      rows: (c) => [sub(c, 0, 'a', 'z-track'), sub(c, 0, 'b', 'a-track')],
+      excerptDurationMs: 1,
+      llm,
+    });
+    await driveToLocked(fsm);
+    await fsm.dispatch('BEGIN_PLAYBACK');
+    await tick(10);
+    await fsm.dispatch('QUEUE_DONE');
+    await tick(15);
+    await orch.nextJudgement(code);
+    await tick(15);
+    await orch.nextJudgement(code);
+
+    const ranked = orch.serialize(code).results ?? [];
+    expect(ranked).toHaveLength(2);
+    expect(ranked.map((entry) => entry.rank)).toEqual([1, 1]);
+    const points = orch.buildSnapshot(code, {
+      playerId: 'a',
+      role: 'host',
+      nickname: null,
+    })?.leaderboard;
+    expect(new Set(points?.map((entry) => entry.totalScore))).toEqual(new Set([5]));
+  });
+
+  it('breaks equal totals by scenario fit, the documented heaviest rubric line', async () => {
+    let call = 0;
+    const llm: LLMProvider = {
+      async complete() {
+        call += 1;
+        const fitHeavy = call === 1;
+        return {
+          model: 'tie-model',
+          text: JSON.stringify({
+            knowledge: 'known',
+            categories: fitHeavy
+              ? { scenarioFit: 3, mood: 1, lyrics: 0.5, genre: 0.5, wildcard: 0 }
+              : { scenarioFit: 1, mood: 2, lyrics: 1, genre: 1, wildcard: 0 },
+            reasons: ['Equal total under the same rubric.', 'Different strengths.'],
+            defense: 'No defense filed.',
+            verdict: 'Close.',
+          }),
+        };
+      },
+    };
+    const { orch, code, fsm } = lockedRoom({
+      rows: (c) => [sub(c, 0, 'a', 'one'), sub(c, 0, 'b', 'two')],
+      excerptDurationMs: 1,
+      llm,
+    });
+    await driveToLocked(fsm);
+    await fsm.dispatch('BEGIN_PLAYBACK');
+    await tick(10);
+    await fsm.dispatch('QUEUE_DONE');
+    await tick(15);
+    await orch.nextJudgement(code);
+    await tick(15);
+    await orch.nextJudgement(code);
+
+    const ranked = orch.serialize(code).results ?? [];
+    expect(ranked.map((entry) => [entry.rank, entry.categories?.scenarioFit])).toEqual(
+      expect.arrayContaining([
+        [1, 3],
+        [2, 1],
+      ]),
+    );
   });
 });
 

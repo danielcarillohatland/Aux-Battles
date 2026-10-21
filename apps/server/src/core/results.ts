@@ -53,7 +53,7 @@ export interface StoredJudgement {
   score: number;
   /** 1-based finishing position, tie-free per judge validation. */
   rank: number;
-  /** One-sentence quip, sanitized/clamped by the judge service. */
+  /** Judge bullets joined into prose, sanitized/clamped by the judge service. */
   explanation: string;
   /** Which model produced it ('fallback-hash' on degradation). */
   judgeModel: string;
@@ -182,8 +182,8 @@ export class ResultsStore {
         const playerId = owners.get(row.trackId);
         if (playerId === undefined) continue; // orphaned judgement (submission evicted)
         const current = board.get(playerId) ?? { playerId, points: 0, wins: 0 };
-        current.points += pointsForRank(row.rank);
-        if (row.rank === 1) current.wins += 1;
+        if (row.judgeModel !== 'crowd-no-votes') current.points += pointsForRank(row.rank);
+        if (row.rank === 1 && row.judgeModel !== 'crowd-no-votes') current.wins += 1;
         board.set(playerId, current);
       }
     }
